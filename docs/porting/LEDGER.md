@@ -19,7 +19,7 @@ Only the orchestrator edits this file.
 |----|-----------------|-------|-------------|------|--------|-----------|------|
 | 001 | `32fa3c8` | bugfix | direct | low | ported | `ce13e80` | Ported and merged via PR/branch port/001; 17 tests passed. |
 | 002 | `7c7c7a2` | bugfix | direct | low | ported | `67dd3ef` | Ported and merged via PR/branch port/002; 18 tests passed. |
-| 003 | `e9cac5f` | bugfix | direct | low | in-progress | `kodokbakar/port-003` | APPROVE (reviewed + 22 tests passed). Awaiting owner approval to merge. |
+| 003 | `e9cac5f` | bugfix | direct | low | ported | `bf2a25f` | Ported and merged via PR/branch kodokbakar/port-003; 22 tests passed. |
 | 004 | `442d5fd` | bugfix | direct | low | pending | | fix: don't drop earlier user messages with same content from chat history — Replaces content equality filter with slice(0, -1) in Step5Interaction to retain duplicate earlier user queries |
 | 005 | `e6a5021` | bugfix | direct | low | pending | | fix(frontend): show local date in history cards (not UTC) — Uses local date getters in formatDate() instead of UTC to avoid displaying wrong calendar day near midnight |
 | 006 | `aaf3ea0` | bugfix | direct | low | pending | | Fix silent data loss when platform defaults to reddit for Twitter-only simulations — Resolves default platform dynamically from simulation config instead of hardcoded 'reddit'. |
