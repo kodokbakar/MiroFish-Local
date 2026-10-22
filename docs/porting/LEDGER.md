@@ -15,34 +15,34 @@ Only the orchestrator edits this file.
 `direct` (cherry-pick works) | `adapt` (needs Neo4j/GraphStorage adaptation) | `skip`
 
 ## Items
-| ID | Upstream commit | Class | Portability | Risk | Status | Branch/PR | Note |
-|----|-----------------|-------|-------------|------|--------|-----------|------|
-| 001 | `32fa3c8` | bugfix | direct | low | ported | `ce13e80` | Ported and merged via PR/branch port/001; 17 tests passed. |
-| 002 | `7c7c7a2` | bugfix | direct | low | ported | `67dd3ef` | Ported and merged via PR/branch port/002; 18 tests passed. |
-| 003 | `e9cac5f` | bugfix | direct | low | ported | `bf2a25f` | Ported and merged via PR/branch kodokbakar/port-003; 22 tests passed. |
-| 004 | `442d5fd` | bugfix | direct | low | pending | | fix: don't drop earlier user messages with same content from chat history — Replaces content equality filter with slice(0, -1) in Step5Interaction to retain duplicate earlier user queries |
-| 005 | `e6a5021` | bugfix | direct | low | pending | | fix(frontend): show local date in history cards (not UTC) — Uses local date getters in formatDate() instead of UTC to avoid displaying wrong calendar day near midnight |
-| 006 | `aaf3ea0` | bugfix | direct | low | pending | | Fix silent data loss when platform defaults to reddit for Twitter-only simulations — Resolves default platform dynamically from simulation config instead of hardcoded 'reddit'. |
-| 007 | `b651883` | bugfix | direct | low | pending | | fix: load Twitter profiles from CSV — Loads Twitter profiles from CSV instead of missing JSON file; includes unit tests. |
-| 008 | `1d96b09` | bugfix | direct | low | pending | | fix: strip fabricated tool_result blocks to prevent LLM hallucination — Strips self-generated `<tool_result>` blocks in report generation to prevent hallucination. |
-| 009 | `f0e3794` | bugfix | direct | low | pending | | fix: sanitize fabricated tool results everywhere — Robust parser sanitizing fabricated `<tool_result>` tags across all report paths; includes tests. |
-| 010 | `41fc932` | bugfix | direct | low | pending | | fix: normalize structured LLM profile fields before serialization — Normalizes structured LLM profile fields into strings/lists before CSV/JSON export. |
-| 011 | `c81d628` | bugfix | direct | low | pending | | chore: update vulnerable npm dependencies — Security patch updating axios, vite, and concurrently npm packages |
-| 012 | `f7138e0` | bugfix | direct | medium | pending | | Correction GPT-5 family error 500 — Adds GPT-5 chat completions parameter compatibility helper. |
-| 013 | `e67a52e` | bugfix | direct | low | pending | | fix: keep GPT-5 compatibility handling narrow — Deterministic parameter adaptation for GPT-5 without speculative error retries; adds test suite. |
-| 014 | `223b283` | bugfix | adapt | low | pending | | fix(security): upgrade axios, rollup, picomatch to fix 3 high severity vulnerabilities — Upgrades frontend dependencies for 3 security CVEs; adapt package.json without upstream vue-i18n |
-| 015 | `fe2fd5b` | bugfix | adapt | low | pending | | fix: CVE-2025-14009 security vulnerability — Upgrades transitive dependency NLTK to 3.10.0 in uv.lock to fix CVE-2025-14009 |
-| 016 | `867b54c` | bugfix | adapt | low | pending | | fix: stop polling when simulation fails — Stops frontend polling on runner failure; adapt English string inline. |
-| 017 | `8b41460` | bugfix | adapt | low | pending | | fix: prioritize failed simulation status — Explicit runner failure prioritized over platform completion flags. |
-| 018 | `a07841e` | bugfix | adapt | low | pending | | fix: handle string attributes in graph ontology to prevent TypeError crash (fixes #135) — Normalizes string ontology attributes from LLM; adapt for GraphStorage in graph builder. |
-| 019 | `f0d487f` | bugfix | adapt | low | pending | | fix: harden ontology JSON generation — Hardens LLM JSON parsing, retries, and error handling across providers; needs adaptation to local llm_client and graph.py |
-| 020 | `e3350a9` | bugfix | adapt | medium | pending | | fix(graph): enforce PascalCase for entity names and SCREAMING_SNAKE_CASE for edge names in ontology validation — Normalizes entity names to PascalCase, edge types to uppercase, and dedupes entities; useful for Neo4j conventions but needs Zep reference cleanup. |
-| 021 | `f0e936a` | bugfix | adapt | medium | pending | | fix: sample long text for ontology generation — Deterministic multi-chunk document sampling for ontology LLM input; requires adapting docstrings/messages to English |
-| 022 | `3f4d561` | bugfix | adapt | medium | pending | | fix(backend): constrain Python version to 3.11-3.12 — Constrains requires-python to '>=3.11,<3.13' in pyproject.toml; uv.lock must be regenerated for local dependencies |
-| 023 | `05bea4a` | bugfix | adapt | medium | pending | | fix: stop Step2 polling after preparation failure — Propagates prepare failures to task manager and halts Step 2 polling; adapt EntityReader test mock and inline UI string. |
-| 024 | `daec4b6` | refactor | direct | low | pending | | refactor: add type hints and FileParser.is_supported() helper — Adds return/arg type hints in config/logger and implements FileParser.is_supported() helper method |
-| 025 | `9f80ad6` | refactor | direct | low | pending | | fix: normalize profile fields at construction — Centralizes profile field normalization inside dataclass constructor; adds unit tests. |
-| 026 | `9506e6f` | refactor | adapt | low | pending | | fix: normalize ontology attributes centrally — Centralizes ontology attribute normalization in utility module; adapt GraphStorage usage and omit Zep Pydantic tests. |
+| ID | Upstream commit | Issue | Class | Portability | Risk | Status | Branch/PR | Note |
+|----|-----------------|-------|-------|-------------|------|--------|-----------|------|
+| 001 | `32fa3c8` | AttributeError on GET /api/graph/tasks due to duplicate .to_dict() call on task dicts | bugfix | direct | low | ported | `ce13e80` | Ported and merged via PR/branch port/001; 17 tests passed. |
+| 002 | `7c7c7a2` | Supply chain vulnerability risk from unpinned caret dependency (^1.13.2) on axios | bugfix | direct | low | ported | `67dd3ef` | Ported and merged via PR/branch port/002; 18 tests passed. |
+| 003 | `e9cac5f` | Flask debug mode enabled by default on 0.0.0.0 exposing interactive console / RCE | bugfix | direct | low | ported | `bf2a25f` | Ported and merged via PR/branch kodokbakar/port-003; 22 tests passed. |
+| 004 | `442d5fd` | Chat history filter drops earlier duplicate user messages when identical prompt re-sent | bugfix | direct | low | pending | | Replaces content equality filter with slice(0, -1) in Step5Interaction |
+| 005 | `e6a5021` | History cards display UTC date causing incorrect calendar date near local midnight | bugfix | direct | low | pending | | Uses local date getters in formatDate() instead of UTC |
+| 006 | `aaf3ea0` | Silent data loss when platform defaults to reddit for Twitter-only simulations | bugfix | direct | low | pending | | Resolves default platform dynamically from simulation config |
+| 007 | `b651883` | SimulationManager crashes attempting to load Twitter profiles from missing JSON file | bugfix | direct | low | pending | | Loads Twitter profiles from CSV instead of JSON; includes tests |
+| 008 | `1d96b09` | LLM hallucination in report agent caused by self-generated <tool_result> blocks | bugfix | direct | low | pending | | Strips self-generated <tool_result> blocks in report agent |
+| 009 | `f0e3794` | Fabricated tool_result tags across report paths bypass single-point sanitization | bugfix | direct | low | pending | | Robust parser sanitizing fabricated tool results everywhere; includes tests |
+| 010 | `41fc932` | Structured LLM output returning dict/list in text fields crashes profile serialization | bugfix | direct | low | pending | | Normalizes profile text fields and lists before CSV/JSON export |
+| 011 | `c81d628` | High severity security vulnerabilities in npm dependencies (axios, vite, concurrently) | bugfix | direct | low | pending | | Updates frontend npm packages to patched versions |
+| 012 | `f7138e0` | HTTP 500 error when using GPT-5 family models due to unsupported chat completion params | bugfix | direct | medium | pending | | Adds GPT-5 chat completions parameter compatibility adapter |
+| 013 | `e67a52e` | Broad speculative error handling in GPT-5 compatibility layer causes retry bugs | bugfix | direct | low | pending | | Keeps GPT-5 parameter adaptation narrow and deterministic; adds tests |
+| 014 | `223b283` | Security CVE vulnerabilities in frontend build dependencies (axios, rollup, picomatch) | bugfix | adapt | low | pending | | Upgrade packages without pulling upstream vue-i18n |
+| 015 | `fe2fd5b` | CVE-2025-14009 vulnerability in transitive dependency NLTK | bugfix | adapt | low | pending | | Upgrade transitive NLTK dependency to 3.10.0 in uv.lock |
+| 016 | `867b54c` | Frontend polling continues endlessly when simulation runner encounters fatal failure | bugfix | adapt | low | pending | | Halts polling on runner failure; adapt English UI string inline |
+| 017 | `8b41460` | Runner failure status masked by platform completion flags in simulation polling | bugfix | adapt | low | pending | | Explicitly prioritizes runner failure over platform completion status |
+| 018 | `a07841e` | TypeError crash (#135) caused by LLM returning string instead of list for ontology attributes | bugfix | adapt | low | pending | | Normalizes string ontology attributes; adapt to GraphStorage |
+| 019 | `f0d487f` | Ontology JSON generation crashes on diverse LLM providers with malformed JSON responses | bugfix | adapt | low | pending | | Hardens JSON parsing and provider error handling; adapt to local llm_client |
+| 020 | `e3350a9` | Inconsistent naming casing and duplicate entity types in ontology generation | bugfix | adapt | medium | pending | | Enforces PascalCase entities, uppercase edges, and deduplication |
+| 021 | `f0e936a` | Ontology generator truncates long texts to first chunk, missing critical context | bugfix | adapt | medium | pending | | Multi-chunk document sampling for ontology LLM input |
+| 022 | `3f4d561` | Unconstrained Python versions lead to build failures on Python 3.13+ | bugfix | adapt | medium | pending | | Constrains requires-python to '>=3.11,<3.13' in pyproject.toml |
+| 023 | `05bea4a` | Step 2 environment setup polling continues after background preparation failure | bugfix | adapt | medium | pending | | Propagates preparation failure to task manager and stops Step 2 polling |
+| 024 | `daec4b6` | Missing type hints in config/logger and missing FileParser.is_supported() helper | refactor | direct | low | pending | | Adds return/arg type hints and FileParser.is_supported() helper |
+| 025 | `9f80ad6` | Field normalization scattered across profile generation rather than centralized | refactor | direct | low | pending | | Centralizes profile field normalization in dataclass constructor |
+| 026 | `9506e6f` | Ontology attribute normalization duplicated across graph builder and generator | refactor | adapt | low | pending | | Centralizes ontology attribute normalization in utility module |
 
 ## Skipped (with reason)
 | Upstream commit | Reason |
