@@ -18,7 +18,7 @@ Only the orchestrator edits this file.
 | ID | Upstream commit | Class | Portability | Risk | Status | Branch/PR | Note |
 |----|-----------------|-------|-------------|------|--------|-----------|------|
 | 001 | `32fa3c8` | bugfix | direct | low | ported | `ce13e80` | Ported and merged via PR/branch port/001; 17 tests passed. |
-| 002 | `7c7c7a2` | bugfix | direct | low | in-progress | port/002 | fix(deps): pin axios version to prevent potential supply chain risks — Pins axios to exact 1.13.2 in frontend/package.json to mitigate dependency supply chain risks. |
+| 002 | `7c7c7a2` | bugfix | direct | low | in-progress | port/002 | APPROVE (reviewed + 18 tests passed). Awaiting owner approval to merge. |
 | 003 | `e9cac5f` | bugfix | direct | low | pending | | fix(security): flask debug mode enabled by default, exposed on 0.0.0.0 — Defaults FLASK_DEBUG to False and adds runtime warning to prevent RCE via Werkzeug console on 0.0.0.0 |
 | 004 | `442d5fd` | bugfix | direct | low | pending | | fix: don't drop earlier user messages with same content from chat history — Replaces content equality filter with slice(0, -1) in Step5Interaction to retain duplicate earlier user queries |
 | 005 | `e6a5021` | bugfix | direct | low | pending | | fix(frontend): show local date in history cards (not UTC) — Uses local date getters in formatDate() instead of UTC to avoid displaying wrong calendar day near midnight |
