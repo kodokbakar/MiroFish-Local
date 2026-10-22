@@ -40,6 +40,7 @@ class EmbeddingService:
         self.timeout = timeout
 
         if self.provider == 'gemini':
+            self.api_key = api_key or Config.GEMINI_API_KEY
             if not self.api_key:
                 raise ValueError("GEMINI_API_KEY not configured")
             clean_model = self.model.removeprefix('models/')
@@ -48,6 +49,11 @@ class EmbeddingService:
                 f"https://generativelanguage.googleapis.com/v1beta/"
                 f"{self._gemini_model}:batchEmbedContents"
             )
+        elif self.provider == 'openai':
+            self.api_key = api_key or Config.EMBEDDING_API_KEY or Config.LLM_API_KEY
+            if not self.api_key:
+                raise ValueError("EMBEDDING_API_KEY or LLM_API_KEY not configured for openai provider")
+            self._embed_url = f"{self.base_url}/embeddings"
         else:
             self._embed_url = f"{self.base_url}/api/embed"
         # Simple in-memory cache (text -> embedding vector)
@@ -157,6 +163,15 @@ class EmbeddingService:
                     for t in texts
                 ]
             }
+        elif self.provider == 'openai':
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.api_key}",
+            }
+            payload = {
+                "model": self.model,
+                "input": texts,
+            }
         else:
             headers = {"Content-Type": "application/json"}
             payload = {
@@ -183,6 +198,14 @@ class EmbeddingService:
                             f"Expected {len(texts)} embeddings, got {len(raw_embeddings)}"
                         )
                     return [item.get("values", []) for item in raw_embeddings]
+                elif self.provider == 'openai':
+                    raw_data = data.get("data", [])
+                    if len(raw_data) != len(texts):
+                        raise EmbeddingError(
+                            f"Expected {len(texts)} embeddings, got {len(raw_data)}"
+                        )
+                    sorted_items = sorted(raw_data, key=lambda x: x.get("index", 0))
+                    return [item.get("embedding", []) for item in sorted_items]
                 else:
                     embeddings = data.get("embeddings", [])
                     if len(embeddings) != len(texts):

@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="./static/image/mirofish-offline-banner.png" alt="MiroFish Local" width="100%"/>
+<img src="./static/image/mirofish-local-banner.jpg" alt="MiroFish Local" width="100%"/>
 
 # MiroFish-Local
 
@@ -24,9 +24,9 @@ The [original MiroFish](https://github.com/666ghj/MiroFish) was built for the Ch
 | Original MiroFish | MiroFish-Local |
 |---|---|
 | Chinese UI | **English UI** (1,000+ strings translated) |
-| Zep Cloud (graph memory) | **Neo4j Community Edition 5.15** |
-| DashScope / OpenAI API (LLM) | **Ollama / DeepSeek / Any OpenAI-compatible API** |
-| Zep Cloud embeddings | **Ollama (nomic-embed-text)** or **Gemini API** |
+| Zep Cloud (graph memory) | **Neo4j Community Edition 5.18+** |
+| DashScope / OpenAI API (LLM) | **Ollama / Gemini / DeepSeek / Any OpenAI-compatible API** |
+| Zep Cloud embeddings | **Ollama (nomic-embed-text)**, **Gemini API**, or **OpenAI API** |
 | Cloud API keys required | **Zero cloud lock-in (Local or Custom API Keys)** |
 
 ## Workflow
@@ -48,7 +48,7 @@ The [original MiroFish](https://github.com/666ghj/MiroFish) was built for the Ch
 ### Prerequisites
 
 - Docker & Docker Compose (recommended), **or**
-- Python 3.11+, Node.js 18+, Neo4j 5.15+, Ollama
+- Python 3.11+, Node.js 18+, Neo4j 5.18+, Ollama
 
 ### Option A: Docker (easiest)
 
@@ -121,20 +121,24 @@ LLM_MODEL_NAME=deepseek-flash          # or qwen2.5:32b
 OPENAI_API_KEY=your_api_key_or_ollama
 OPENAI_API_BASE_URL=https://api.deepseek.com
 
-# Embeddings (provider: 'gemini' or 'ollama')
-EMBEDDING_PROVIDER=gemini              # or 'ollama'
-GEMINI_API_KEY=your_gemini_api_key     # required if provider is gemini
-EMBEDDING_MODEL=gemini-embedding-2     # or nomic-embed-text
+# Embeddings (provider: 'ollama', 'gemini', or 'openai')
+EMBEDDING_PROVIDER=ollama              # or 'gemini', 'openai'
+EMBEDDING_MODEL=nomic-embed-text       # or gemini-embedding-2, text-embedding-3-small
 EMBEDDING_DIMENSIONS=768
 EMBEDDING_BASE_URL=http://localhost:11434
 
+# Required only if provider is 'gemini':
+# GEMINI_API_KEY=your_gemini_api_key
+
+# Required only if provider is 'openai':
+# EMBEDDING_API_KEY=your_api_key
 # Neo4j
 NEO4J_URI=bolt://localhost:7687
 NEO4J_USER=neo4j
 NEO4J_PASSWORD=mirofish
 ```
 
-Works with any OpenAI-compatible API (DeepSeek, OpenAI, Claude via proxy, Ollama) and supports Google Gemini or local Ollama for embeddings.
+Works with local Ollama out of the box, or with Google Gemini and any OpenAI-compatible API (DeepSeek, OpenAI, Claude via proxy, vLLM).
 ## Architecture
 
 This fork introduces a clean abstraction layer between the application and the graph database:
@@ -157,7 +161,7 @@ This fork introduces a clean abstraction layer between the application and the g
 │    ┌─────────▼─────────┐                │
 │    │   Neo4jStorage     │                │
 │    │  ┌───────────────┐ │                │
-│    │  │ EmbeddingService│ ← Ollama       │
+│    │  │ EmbeddingService│ ← Ollama / Gemini / OpenAI │
 │    │  │ NERExtractor   │ ← Ollama LLM   │
 │    │  │ SearchService  │ ← Hybrid search │
 │    │  └───────────────┘ │                │

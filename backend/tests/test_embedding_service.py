@@ -147,6 +147,31 @@ class TestEmbeddingService(unittest.TestCase):
         self.assertEqual(call_kwargs["json"], {"model": "nomic-embed-text", "input": ["test ollama"]})
 
     @patch("app.storage.embedding_service.requests.post")
+    def test_openai_compatibility(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        fake_vector = [0.3] * 768
+        mock_resp.json.return_value = {
+            "data": [{"embedding": fake_vector, "index": 0}]
+        }
+        mock_post.return_value = mock_resp
+
+        service = EmbeddingService(
+            provider="openai",
+            base_url="https://api.openai.com/v1",
+            api_key="test-openai-key",
+            model="text-embedding-3-small",
+            dimensions=768
+        )
+        self.assertEqual(service._embed_url, "https://api.openai.com/v1/embeddings")
+        vec = service.embed("test openai")
+
+        self.assertEqual(vec, fake_vector)
+        call_kwargs = mock_post.call_args.kwargs
+        self.assertEqual(call_kwargs["headers"]["Authorization"], "Bearer test-openai-key")
+        self.assertEqual(call_kwargs["json"], {"model": "text-embedding-3-small", "input": ["test openai"]})
+
+    @patch("app.storage.embedding_service.requests.post")
     def test_health_check(self, mock_post):
         mock_resp = MagicMock()
         mock_resp.status_code = 200
@@ -172,6 +197,23 @@ class TestEmbeddingService(unittest.TestCase):
         Config.NEO4J_PASSWORD = "pass"
         Config.EMBEDDING_PROVIDER = "gemini"
         Config.GEMINI_API_KEY = "valid-key"
+        errors = Config.validate()
+        self.assertEqual(errors, [])
+    def test_config_validate_openai_missing_key(self):
+        Config.LLM_API_KEY = None
+        Config.NEO4J_URI = "bolt://localhost:7687"
+        Config.NEO4J_PASSWORD = "pass"
+        Config.EMBEDDING_PROVIDER = "openai"
+        Config.EMBEDDING_API_KEY = None
+        errors = Config.validate()
+        self.assertTrue(any("EMBEDDING_API_KEY" in err for err in errors))
+
+    def test_config_validate_openai_success(self):
+        Config.LLM_API_KEY = "dummy"
+        Config.NEO4J_URI = "bolt://localhost:7687"
+        Config.NEO4J_PASSWORD = "pass"
+        Config.EMBEDDING_PROVIDER = "openai"
+        Config.EMBEDDING_API_KEY = "custom-key"
         errors = Config.validate()
         self.assertEqual(errors, [])
 

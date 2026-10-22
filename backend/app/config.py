@@ -40,6 +40,7 @@ class Config:
     # Embedding configuration
     EMBEDDING_PROVIDER = os.environ.get('EMBEDDING_PROVIDER', 'ollama').lower()
     GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
+    EMBEDDING_API_KEY = os.environ.get('EMBEDDING_API_KEY')
     EMBEDDING_MODEL = os.environ.get(
         'EMBEDDING_MODEL',
         'gemini-embedding-2' if os.environ.get('EMBEDDING_PROVIDER', '').lower() == 'gemini' else 'nomic-embed-text'
@@ -86,4 +87,6 @@ class Config:
             errors.append("NEO4J_PASSWORD not configured")
         if cls.EMBEDDING_PROVIDER == 'gemini' and not cls.GEMINI_API_KEY:
             errors.append("GEMINI_API_KEY not configured for gemini embedding provider")
+        if cls.EMBEDDING_PROVIDER == 'openai' and not (cls.EMBEDDING_API_KEY or cls.LLM_API_KEY):
+            errors.append("EMBEDDING_API_KEY (or LLM_API_KEY) not configured for openai embedding provider")
         return errors
