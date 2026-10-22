@@ -22,7 +22,7 @@ class Config:
 
     # Flask configuration
     SECRET_KEY = os.environ.get('SECRET_KEY', 'mirofish-secret-key')
-    DEBUG = os.environ.get('FLASK_DEBUG', 'True').lower() == 'true'
+    DEBUG = os.environ.get('FLASK_DEBUG', 'False').lower() == 'true'
 
     # JSON configuration - disable ASCII escaping to display Chinese directly (not as \uXXXX)
     JSON_AS_ASCII = False
@@ -89,4 +89,7 @@ class Config:
             errors.append("GEMINI_API_KEY not configured for gemini embedding provider")
         if cls.EMBEDDING_PROVIDER == 'openai' and not (cls.EMBEDDING_API_KEY or cls.LLM_API_KEY):
             errors.append("EMBEDDING_API_KEY (or LLM_API_KEY) not configured for openai embedding provider")
+        if cls.DEBUG:
+            import warnings
+            warnings.warn("Flask DEBUG mode is enabled. Do not use in production.", RuntimeWarning)
         return errors
