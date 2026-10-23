@@ -665,6 +665,12 @@ Your task is to:
    - Don't add information that doesn't exist in the simulation
    - If information is insufficient in some aspects, state it truthfully
 
+5. [Prohibit Fabricating Data]
+   - ❌ Forbidden to fabricate usernames, quotes, statistical numbers, or interaction data
+   - ❌ Forbidden to include <tool_result> blocks in your response — only the system provides tool results
+   - ✅ Only cite entities, quotes, and data that actually appear in tool results
+   - If there is no relevant content in tool results, state it truthfully rather than making it up
+
 ═══════════════════════════════════════════════════════════════
 [⚠️ Format Specification - Extremely Important!]
 ═══════════════════════════════════════════════════════════════
@@ -1141,6 +1147,26 @@ class ReportAgent:
                 desc_parts.append(f"  Parameters: {params_desc}")
         return "\n".join(desc_parts)
     
+
+    @staticmethod
+    def _strip_fake_tool_results(response: str) -> str:
+        """Strip any <tool_result> blocks the LLM fabricated in its response.
+
+        When the LLM generates a <tool_call> block and then continues to generate
+        a <tool_result> block in the same response, we must strip the fake result
+        before appending to message history. The real tool result will be injected
+        separately by the system.
+        """
+        import re
+        cleaned = re.sub(
+            r'<tool_result>.*?</tool_result>',
+            '',
+            response,
+            flags=re.DOTALL,
+        )
+        cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+        return cleaned.strip()
+
     def plan_outline(
         self,
         progress_callback: Optional[Callable] = None
@@ -1342,7 +1368,8 @@ class ReportAgent:
 
                 if conflict_retries <= 2:
                     # First two times: discard this response and request LLM to reply again
-                    messages.append({"role": "assistant", "content": response})
+                    cleaned_response = ReportAgent._strip_fake_tool_results(response)
+                    messages.append({"role": "assistant", "content": cleaned_response})
                     messages.append({
                         "role": "user",
                         "content": (
@@ -1383,7 +1410,8 @@ class ReportAgent:
             if has_final_answer:
                 # Insufficient tool calls, reject and request to continue calling tools
                 if tool_calls_count < min_tool_calls:
-                    messages.append({"role": "assistant", "content": response})
+                    cleaned_response = ReportAgent._strip_fake_tool_results(response)
+                    messages.append({"role": "assistant", "content": cleaned_response})
                     unused_tools = all_tools - used_tools
                     unused_hint = f"(These tools have not been used, recommend using them: {', '.join(unused_tools)}）" if unused_tools else ""
                     messages.append({
@@ -1461,7 +1489,8 @@ class ReportAgent:
                 if unused_tools and tool_calls_count < self.MAX_TOOL_CALLS_PER_SECTION:
                     unused_hint = REACT_UNUSED_TOOLS_HINT.format(unused_list="、".join(unused_tools))
 
-                messages.append({"role": "assistant", "content": response})
+                cleaned_response = ReportAgent._strip_fake_tool_results(response)
+                messages.append({"role": "assistant", "content": cleaned_response})
                 messages.append({
                     "role": "user",
                     "content": REACT_OBSERVATION_TEMPLATE.format(
@@ -1864,7 +1893,8 @@ class ReportAgent:
                 tool_calls_made.append(call)
             
             # convertresultadd to message
-            messages.append({"role": "assistant", "content": response})
+            cleaned_response = ReportAgent._strip_fake_tool_results(response)
+            messages.append({"role": "assistant", "content": cleaned_response})
             observation = "\n".join([f"[{r['tool']}result]\n{r['result']}" for r in tool_results])
             messages.append({
                 "role": "user",
