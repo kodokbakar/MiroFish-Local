@@ -19,6 +19,29 @@ from ..models.project import ProjectManager
 logger = get_logger('mirofish.api.simulation')
 
 
+def _get_default_platform(simulation_id: str) -> str:
+    """
+    Return default platform based on simulation config.
+
+    Reads enable_twitter / enable_reddit settings from SimulationState
+    and returns the actual platform used, instead of hardcoded 'reddit'.
+
+    Args:
+        simulation_id: Simulation ID
+
+    Returns:
+        'twitter' or 'reddit'
+    """
+    try:
+        manager = SimulationManager()
+        state = manager._load_simulation_state(simulation_id)
+        if state:
+            return state.get_default_platform()
+    except Exception:
+        pass
+    return "reddit"
+
+
 # Interview prompt optimization prefix
 # Adding this prefix can prevent agents from calling tools and reply directly with text
 INTERVIEW_PROMPT_PREFIX = "Based on your persona, all your past memories and actions, reply directly to me with text without calling any tools:"
@@ -988,7 +1011,7 @@ def get_simulation_profiles(simulation_id: str):
         platform: Platform type（reddit/twitter，Defaultreddit）
     """
     try:
-        platform = request.args.get('platform', 'reddit')
+        platform = request.args.get('platform') or _get_default_platform(simulation_id)
         
         manager = SimulationManager()
         profiles = manager.get_profiles(simulation_id, platform=platform)
@@ -1050,7 +1073,7 @@ def get_simulation_profiles_realtime(simulation_id: str):
     from datetime import datetime
     
     try:
-        platform = request.args.get('platform', 'reddit')
+        platform = request.args.get('platform') or _get_default_platform(simulation_id)
         
         # Get simulation directory
         sim_dir = os.path.join(Config.OASIS_SIMULATION_DATA_DIR, simulation_id)
@@ -1992,7 +2015,7 @@ def get_simulation_posts(simulation_id: str):
     Return post list (read from SQLite database)
     """
     try:
-        platform = request.args.get('platform', 'reddit')
+        platform = request.args.get('platform') or _get_default_platform(simulation_id)
         limit = request.args.get('limit', 50, type=int)
         offset = request.args.get('offset', 0, type=int)
         
@@ -2060,14 +2083,16 @@ def get_simulation_posts(simulation_id: str):
 @simulation_bp.route('/<simulation_id>/comments', methods=['GET'])
 def get_simulation_comments(simulation_id: str):
     """
-    Get comments in simulation（OnlyReddit）
+    Get comments in simulation
     
     Query parameters:
-        post_id: Filter postsID（Optional）
+        platform: Platform type (twitter/reddit, defaults to simulation config)
+        post_id: Filter posts ID (Optional)
         limit: Return count
         offset: Offset
     """
     try:
+        platform = request.args.get('platform') or _get_default_platform(simulation_id)
         post_id = request.args.get('post_id')
         limit = request.args.get('limit', 50, type=int)
         offset = request.args.get('offset', 0, type=int)
@@ -2077,7 +2102,7 @@ def get_simulation_comments(simulation_id: str):
             f'../../uploads/simulations/{simulation_id}'
         )
         
-        db_path = os.path.join(sim_dir, "reddit_simulation.db")
+        db_path = os.path.join(sim_dir, f"{platform}_simulation.db")
         
         if not os.path.exists(db_path):
             return jsonify({

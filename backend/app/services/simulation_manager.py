@@ -96,6 +96,15 @@ class SimulationState:
             "error": self.error,
         }
     
+    def get_default_platform(self) -> str:
+        """Return default platform based on enabled simulation flags."""
+        if self.enable_twitter and self.enable_reddit:
+            return "reddit"  # Default when both are enabled
+        elif self.enable_twitter:
+            return "twitter"
+        else:
+            return "reddit"
+
     def to_simple_dict(self) -> Dict[str, Any]:
         """Simplified status dict (API return use)"""
         return {
@@ -480,11 +489,14 @@ class SimulationManager:
         
         return simulations
     
-    def get_profiles(self, simulation_id: str, platform: str = "reddit") -> List[Dict[str, Any]]:
+    def get_profiles(self, simulation_id: str, platform: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get Agent Profiles for simulation"""
         state = self._load_simulation_state(simulation_id)
         if not state:
             raise ValueError(f"Simulation does not exist: {simulation_id}")
+        
+        if platform is None:
+            platform = state.get_default_platform()
         
         sim_dir = self._get_simulation_dir(simulation_id)
         profile_path = os.path.join(sim_dir, f"{platform}_profiles.json")

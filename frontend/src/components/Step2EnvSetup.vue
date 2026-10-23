@@ -909,7 +909,7 @@ const fetchProfilesRealtime = async () => {
   if (!props.simulationId) return
   
   try {
-    const res = await getSimulationProfilesRealtime(props.simulationId, 'reddit')
+    const res = await getSimulationProfilesRealtime(props.simulationId)
     
     if (res.success && res.data) {
       const prevCount = profiles.value.length
