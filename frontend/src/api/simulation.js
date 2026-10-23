@@ -35,19 +35,21 @@ export const getSimulation = (simulationId) => {
 /**
  * Get Agent Profiles for simulation
  * @param {string} simulationId
- * @param {string} platform - 'reddit' | 'twitter'
+ * @param {string} [platform] - 'reddit' | 'twitter' (defaults to simulation config if omitted)
  */
-export const getSimulationProfiles = (simulationId, platform = 'reddit') => {
-  return service.get(`/api/simulation/${simulationId}/profiles`, { params: { platform } })
+export const getSimulationProfiles = (simulationId, platform) => {
+  const params = platform ? { platform } : {}
+  return service.get(`/api/simulation/${simulationId}/profiles`, { params })
 }
 
 /**
  * Get Agent Profiles being generated in real-time
  * @param {string} simulationId
- * @param {string} platform - 'reddit' | 'twitter'
+ * @param {string} [platform] - 'reddit' | 'twitter' (defaults to simulation config if omitted)
  */
-export const getSimulationProfilesRealtime = (simulationId, platform = 'reddit') => {
-  return service.get(`/api/simulation/${simulationId}/profiles/realtime`, { params: { platform } })
+export const getSimulationProfilesRealtime = (simulationId, platform) => {
+  const params = platform ? { platform } : {}
+  return service.get(`/api/simulation/${simulationId}/profiles/realtime`, { params })
 }
 
 /**
@@ -111,14 +113,14 @@ export const getRunStatusDetail = (simulationId) => {
 /**
  * Get posts from simulation
  * @param {string} simulationId
- * @param {string} platform - 'reddit' | 'twitter'
+ * @param {string} [platform] - 'reddit' | 'twitter' (defaults to simulation config if omitted)
  * @param {number} limit - Number of results
  * @param {number} offset - Offset
  */
-export const getSimulationPosts = (simulationId, platform = 'reddit', limit = 50, offset = 0) => {
-  return service.get(`/api/simulation/${simulationId}/posts`, {
-    params: { platform, limit, offset }
-  })
+export const getSimulationPosts = (simulationId, platform, limit = 50, offset = 0) => {
+  const params = { limit, offset }
+  if (platform) params.platform = platform
+  return service.get(`/api/simulation/${simulationId}/posts`, { params })
 }
 
 /**
