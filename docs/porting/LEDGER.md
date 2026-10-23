@@ -20,7 +20,7 @@ Only the orchestrator edits this file.
 | 001 | `32fa3c8` | AttributeError on GET /api/graph/tasks due to duplicate .to_dict() call on task dicts | bugfix | direct | low | ported | `ce13e80` | Ported and merged via PR/branch port/001; 17 tests passed. |
 | 002 | `7c7c7a2` | Supply chain vulnerability risk from unpinned caret dependency (^1.13.2) on axios | bugfix | direct | low | ported | `67dd3ef` | Ported and merged via PR/branch port/002; 18 tests passed. |
 | 003 | `e9cac5f` | Flask debug mode enabled by default on 0.0.0.0 exposing interactive console / RCE | bugfix | direct | low | ported | `bf2a25f` | Ported and merged via PR/branch kodokbakar/port-003; 22 tests passed. |
-| 004 | `442d5fd` | Chat history filter drops earlier duplicate user messages when identical prompt re-sent | bugfix | direct | low | pending | | Replaces content equality filter with slice(0, -1) in Step5Interaction |
+| 004 | `442d5fd` | Chat history filter drops earlier duplicate user messages when identical prompt re-sent | bugfix | direct | low | in-progress | `kodokbakar/port-004` | APPROVE (reviewed + 26 tests passed). Awaiting owner approval to merge. |
 | 005 | `e6a5021` | History cards display UTC date causing incorrect calendar date near local midnight | bugfix | direct | low | pending | | Uses local date getters in formatDate() instead of UTC |
 | 006 | `aaf3ea0` | Silent data loss when platform defaults to reddit for Twitter-only simulations | bugfix | direct | low | pending | | Resolves default platform dynamically from simulation config |
 | 007 | `b651883` | SimulationManager crashes attempting to load Twitter profiles from missing JSON file | bugfix | direct | low | pending | | Loads Twitter profiles from CSV instead of JSON; includes tests |
