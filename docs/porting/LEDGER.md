@@ -24,7 +24,7 @@ Only the orchestrator edits this file.
 | 005 | `e6a5021` | History cards display UTC date causing incorrect calendar date near local midnight | bugfix | direct | low | ported | `e70169e` | Ported and merged via branch kodokbakar/port-005; 30 tests passed. |
 | 006 | `aaf3ea0` | Silent data loss when platform defaults to reddit for Twitter-only simulations | bugfix | direct | low | ported | `b372834` | Ported and merged via branch kodokbakar/port-006; 47 tests passed. |
 | 007 | `b651883` | SimulationManager crashes attempting to load Twitter profiles from missing JSON file | bugfix | direct | low | in-progress | `kodokbakar/port-007` | APPROVE (reviewed + 58 tests passed). Awaiting owner approval to merge. |
-| 008 | `1d96b09` | LLM hallucination in report agent caused by self-generated <tool_result> blocks | bugfix | direct | low | pending | | Strips self-generated <tool_result> blocks in report agent |
+| 008 | `1d96b09` | LLM hallucination in report agent caused by self-generated <tool_result> blocks | bugfix | direct | low | ported | `kodokbakar/port-008` | Ported via branch kodokbakar/port-008; 56 tests passed (9 new). |
 | 009 | `f0e3794` | Fabricated tool_result tags across report paths bypass single-point sanitization | bugfix | direct | low | pending | | Robust parser sanitizing fabricated tool results everywhere; includes tests |
 | 010 | `41fc932` | Structured LLM output returning dict/list in text fields crashes profile serialization | bugfix | direct | low | pending | | Normalizes profile text fields and lists before CSV/JSON export |
 | 011 | `c81d628` | High severity security vulnerabilities in npm dependencies (axios, vite, concurrently) | bugfix | direct | low | pending | | Updates frontend npm packages to patched versions |
