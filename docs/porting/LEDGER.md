@@ -21,7 +21,7 @@ Only the orchestrator edits this file.
 | 002 | `7c7c7a2` | Supply chain vulnerability risk from unpinned caret dependency (^1.13.2) on axios | bugfix | direct | low | ported | `67dd3ef` | Ported and merged via PR/branch port/002; 18 tests passed. |
 | 003 | `e9cac5f` | Flask debug mode enabled by default on 0.0.0.0 exposing interactive console / RCE | bugfix | direct | low | ported | `bf2a25f` | Ported and merged via PR/branch kodokbakar/port-003; 22 tests passed. |
 | 004 | `442d5fd` | Chat history filter drops earlier duplicate user messages when identical prompt re-sent | bugfix | direct | low | pending | | Replaces content equality filter with slice(0, -1) in Step5Interaction |
-| 005 | `e6a5021` | History cards display UTC date causing incorrect calendar date near local midnight | bugfix | direct | low | pending | | Uses local date getters in formatDate() instead of UTC |
+| 005 | `e6a5021` | History cards display UTC date causing incorrect calendar date near local midnight | bugfix | direct | low | in-progress | `kodokbakar/port-005` | APPROVE (reviewed + 27 tests passed). Awaiting owner approval to merge. |
 | 006 | `aaf3ea0` | Silent data loss when platform defaults to reddit for Twitter-only simulations | bugfix | direct | low | pending | | Resolves default platform dynamically from simulation config |
 | 007 | `b651883` | SimulationManager crashes attempting to load Twitter profiles from missing JSON file | bugfix | direct | low | pending | | Loads Twitter profiles from CSV instead of JSON; includes tests |
 | 008 | `1d96b09` | LLM hallucination in report agent caused by self-generated <tool_result> blocks | bugfix | direct | low | pending | | Strips self-generated <tool_result> blocks in report agent |
