@@ -6,6 +6,7 @@ Use preset scripts + LLM intelligent generation of config parameters
 
 import os
 import json
+import csv
 import shutil
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
@@ -498,11 +499,21 @@ class SimulationManager:
         if platform is None:
             platform = state.get_default_platform()
         
+        if platform not in {"twitter", "reddit"}:
+            raise ValueError(f"Unsupported platform (不支持的平台): {platform}")
+        
         sim_dir = self._get_simulation_dir(simulation_id)
-        profile_path = os.path.join(sim_dir, f"{platform}_profiles.json")
+        profile_path = os.path.join(
+            sim_dir,
+            "twitter_profiles.csv" if platform == "twitter" else "reddit_profiles.json",
+        )
         
         if not os.path.exists(profile_path):
             return []
+        
+        if platform == "twitter":
+            with open(profile_path, 'r', encoding='utf-8', newline='') as f:
+                return list(csv.DictReader(f))
         
         with open(profile_path, 'r', encoding='utf-8') as f:
             return json.load(f)
