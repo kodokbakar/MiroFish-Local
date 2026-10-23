@@ -94,7 +94,7 @@ class TestSimulationManagerGetProfiles:
         return manager, tmp_path
 
     def test_loads_twitter_profiles_when_twitter_only_and_platform_none(self, manager_and_dir):
-        """When platform=None on Twitter-only simulation, loads twitter_profiles.json."""
+        """When platform=None on Twitter-only simulation, loads twitter_profiles.csv."""
         manager, base_dir = manager_and_dir
         sim_id = "sim_twitter_only"
 
@@ -111,8 +111,10 @@ class TestSimulationManagerGetProfiles:
         reddit_profiles = [{"id": "r1", "username": "bob", "platform": "reddit"}]
 
         sim_dir = base_dir / sim_id
-        with open(sim_dir / "twitter_profiles.json", "w", encoding="utf-8") as f:
-            json.dump(twitter_profiles, f)
+        with open(sim_dir / "twitter_profiles.csv", "w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=["id", "username", "platform"])
+            writer.writeheader()
+            writer.writerows(twitter_profiles)
         with open(sim_dir / "reddit_profiles.json", "w", encoding="utf-8") as f:
             json.dump(reddit_profiles, f)
 
@@ -166,8 +168,10 @@ class TestSimulationManagerGetProfiles:
         reddit_profiles = [{"id": "r1", "username": "bob"}]
 
         sim_dir = base_dir / sim_id
-        with open(sim_dir / "twitter_profiles.json", "w", encoding="utf-8") as f:
-            json.dump(twitter_profiles, f)
+        with open(sim_dir / "twitter_profiles.csv", "w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=["id", "username"])
+            writer.writeheader()
+            writer.writerows(twitter_profiles)
         with open(sim_dir / "reddit_profiles.json", "w", encoding="utf-8") as f:
             json.dump(reddit_profiles, f)
 
@@ -304,20 +308,15 @@ class TestSimulationApiPlatformEndpoints:
             with open(os.path.join(sim_dir, "state.json"), "w", encoding="utf-8") as f:
                 json.dump(state.to_dict(), f, indent=2)
 
-            # 2. Profiles for SimulationManager.get_profiles
+            # 2. Profiles for SimulationManager.get_profiles and realtime endpoint
             tw_profiles = [{"id": "tw_agent_1", "name": "Twitter User"}]
             rd_profiles = [{"id": "rd_agent_1", "name": "Reddit User"}]
-            with open(os.path.join(sim_dir, "twitter_profiles.json"), "w", encoding="utf-8") as f:
-                json.dump(tw_profiles, f)
-            with open(os.path.join(sim_dir, "reddit_profiles.json"), "w", encoding="utf-8") as f:
-                json.dump(rd_profiles, f)
-
-            # 3. Profiles for realtime endpoint (twitter_profiles.csv / reddit_profiles.json)
             with open(os.path.join(sim_dir, "twitter_profiles.csv"), "w", encoding="utf-8", newline="") as f:
                 writer = csv.DictWriter(f, fieldnames=["id", "name"])
                 writer.writeheader()
-                writer.writerow({"id": "tw_csv_1", "name": "Twitter Realtime User"})
-
+                writer.writerows(tw_profiles)
+            with open(os.path.join(sim_dir, "reddit_profiles.json"), "w", encoding="utf-8") as f:
+                json.dump(rd_profiles, f)
             # 4. SQLite databases for posts and comments
             for platform, post_content, comment_content in [
                 ("twitter", "Post from Twitter", "Comment from Twitter"),
@@ -384,7 +383,7 @@ class TestSimulationApiPlatformEndpoints:
         assert tw_data["success"] is True
         assert tw_data["data"]["platform"] == "twitter"
         assert tw_data["data"]["file_exists"] is True
-        assert tw_data["data"]["profiles"][0]["name"] == "Twitter Realtime User"
+        assert tw_data["data"]["profiles"][0]["name"] == "Twitter User"
 
         # Reddit-only without platform param -> loads reddit_profiles.json
         rd_resp = app_client.get(f"/api/simulation/{rd_sim_id}/profiles/realtime")
