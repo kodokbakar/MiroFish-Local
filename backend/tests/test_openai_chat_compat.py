@@ -40,6 +40,8 @@ def test_is_unsupported_param_error():
     assert _is_unsupported_param_error("Temperature is only supported when reasoning is none", "temperature") is True
     assert _is_unsupported_param_error("Rate limit exceeded", "temperature") is False
     assert _is_unsupported_param_error("Connection timeout", "max_tokens") is False
+    assert _is_unsupported_param_error("", "temperature") is False
+    assert _is_unsupported_param_error(None, "temperature") is False
 
 
 def test_create_chat_completion_standard_model():
@@ -92,6 +94,45 @@ def test_create_chat_completion_gpt5_model():
     )
 
 
+def test_create_chat_completion_model_whitespace_and_casing():
+    client = MagicMock()
+    fake_response = MagicMock()
+    client.chat.completions.create.return_value = fake_response
+
+    messages = [{"role": "user", "content": "hi"}]
+    # Test whitespace and uppercase for GPT-5 model
+    res = create_chat_completion(
+        client,
+        model="  GPT-5-preview  ",
+        messages=messages,
+        temperature=0.7,
+        max_tokens=4096,
+    )
+    assert res == fake_response
+    client.chat.completions.create.assert_called_with(
+        model="  GPT-5-preview  ",
+        messages=messages,
+        max_completion_tokens=4096,
+    )
+    assert "temperature" not in client.chat.completions.create.call_args.kwargs
+
+    # Test whitespace-only model does not trigger GPT-5 handling
+    client.chat.completions.create.reset_mock()
+    res2 = create_chat_completion(
+        client,
+        model="   ",
+        messages=messages,
+        temperature=0.7,
+        max_tokens=2048,
+    )
+    assert res2 == fake_response
+    client.chat.completions.create.assert_called_with(
+        model="   ",
+        messages=messages,
+        temperature=0.7,
+        max_tokens=2048,
+    )
+
 def test_create_chat_completion_with_extra_params():
     client = MagicMock()
     fake_response = MagicMock()
@@ -113,6 +154,39 @@ def test_create_chat_completion_with_extra_params():
         extra_body={"options": {"num_ctx": 8192}},
     )
 
+
+def test_create_chat_completion_gpt5_with_extra_params():
+    client = MagicMock()
+    fake_response = MagicMock()
+    client.chat.completions.create.return_value = fake_response
+
+    messages = [{"role": "user", "content": "hi"}]
+    extra = {
+        "seed": 42,
+        "timeout": 30.0,
+        "extra_body": {"reasoning_effort": "low"},
+    }
+    res = create_chat_completion(
+        client,
+        model="gpt-5-nano",
+        messages=messages,
+        temperature=0.5,
+        max_tokens=1024,
+        response_format={"type": "json_object"},
+        extra_params=extra,
+    )
+
+    assert res == fake_response
+    client.chat.completions.create.assert_called_once_with(
+        model="gpt-5-nano",
+        messages=messages,
+        max_completion_tokens=1024,
+        response_format={"type": "json_object"},
+        seed=42,
+        timeout=30.0,
+        extra_body={"reasoning_effort": "low"},
+    )
+    assert "temperature" not in client.chat.completions.create.call_args.kwargs
 
 def test_fallback_retry_temperature_unsupported():
     client = MagicMock()
@@ -218,6 +292,76 @@ def test_fallback_retry_non_param_error_raises():
 
     assert client.chat.completions.create.call_count == 1
 
+
+def test_fallback_retry_non_unsupported_exception_after_retry():
+    client = MagicMock()
+    client.chat.completions.create.side_effect = [
+        Exception("unsupported parameter: temperature"),
+        RuntimeError("Internal Server Error 500"),
+    ]
+
+    with pytest.raises(RuntimeError, match="Internal Server Error 500"):
+        create_chat_completion(
+            client,
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            temperature=0.7,
+        )
+
+    # Failed on attempt 2 with non-unsupported error; must NOT proceed to attempt 3 or 4
+    assert client.chat.completions.create.call_count == 2
+
+
+def test_fallback_retry_network_error_immediate_raise():
+    client = MagicMock()
+    client.chat.completions.create.side_effect = ConnectionError("Connection reset by peer")
+
+    with pytest.raises(ConnectionError, match="Connection reset by peer"):
+        create_chat_completion(
+            client,
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            temperature=0.7,
+        )
+
+    assert client.chat.completions.create.call_count == 1
+
+
+def test_fallback_retry_max_attempts_exhaustion():
+    client = MagicMock()
+    client.chat.completions.create.side_effect = [
+        Exception("unsupported parameter: temperature"),
+        Exception("unsupported parameter: response_format"),
+        MagicMock(),  # would succeed on attempt 3 if not exhausted
+    ]
+
+    with pytest.raises(Exception, match="unsupported parameter: response_format"):
+        create_chat_completion(
+            client,
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            temperature=0.7,
+            response_format={"type": "json_object"},
+            max_attempts=2,
+        )
+
+    assert client.chat.completions.create.call_count == 2
+
+
+def test_fallback_retry_max_attempts_single_attempt():
+    client = MagicMock()
+    client.chat.completions.create.side_effect = Exception("unsupported parameter: temperature")
+
+    with pytest.raises(Exception, match="unsupported parameter: temperature"):
+        create_chat_completion(
+            client,
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            temperature=0.7,
+            max_attempts=1,
+        )
+
+    assert client.chat.completions.create.call_count == 1
 
 def test_extract_chat_completion_text_string():
     class Message:
