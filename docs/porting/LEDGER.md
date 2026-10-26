@@ -28,7 +28,7 @@ Only the orchestrator edits this file.
 | 009 | `f0e3794` | Fabricated tool_result tags across report paths bypass single-point sanitization | bugfix | direct | low | ported | `09e6555` | Ported and merged via branch kodokbakar/port-009; 77 tests passed. |
 | 010 | `41fc932` | Structured LLM output returning dict/list in text fields crashes profile serialization | bugfix | direct | low | ported | `67fae64` | Ported and merged via branch kodokbakar/port-010; 85 tests passed. |
 | 011 | `c81d628` | High severity security vulnerabilities in npm dependencies (axios, vite, concurrently) | bugfix | direct | low | pending | | Updates frontend npm packages to patched versions |
-| 012 | `f7138e0` | HTTP 500 error when using GPT-5 family models due to unsupported chat completion params | bugfix | direct | medium | pending | | Adds GPT-5 chat completions parameter compatibility adapter |
+| 012 | `f7138e0` | HTTP 500 error when using GPT-5 family models due to unsupported chat completion params | bugfix | direct | medium | ported | `kodokbakar/port-012` | Ported via branch kodokbakar/port-012; 109 tests passed (23 new). |
 | 013 | `e67a52e` | Broad speculative error handling in GPT-5 compatibility layer causes retry bugs | bugfix | direct | low | pending | | Keeps GPT-5 parameter adaptation narrow and deterministic; adds tests |
 | 014 | `223b283` | Security CVE vulnerabilities in frontend build dependencies (axios, rollup, picomatch) | bugfix | adapt | low | pending | | Upgrade packages without pulling upstream vue-i18n |
 | 015 | `fe2fd5b` | CVE-2025-14009 vulnerability in transitive dependency NLTK | bugfix | adapt | low | pending | | Upgrade transitive NLTK dependency to 3.10.0 in uv.lock |
