@@ -4,8 +4,25 @@ Interface 1: Analyze text content and generate entity and relationship type defi
 """
 
 import json
+import logging
+import re
 from typing import Dict, Any, List, Optional
 from ..utils.llm_client import LLMClient
+
+logger = logging.getLogger(__name__)
+
+
+def _to_pascal_case(name: str) -> str:
+    """Convert name in arbitrary format to PascalCase (e.g. 'works_for' -> 'WorksFor', 'person' -> 'Person')."""
+    # Split by non-alphanumeric characters
+    parts = re.split(r'[^a-zA-Z0-9]+', name)
+    # Further split camelCase boundaries (e.g. 'camelCase' -> ['camel', 'Case'])
+    words = []
+    for part in parts:
+        words.extend(re.sub(r'([a-z])([A-Z])', r'\1_\2', part).split('_'))
+    # Capitalize each word and filter empty strings
+    result = ''.join(word.capitalize() for word in words if word)
+    return result if result else 'Unknown'
 
 
 # System prompt for ontology generation
@@ -266,7 +283,16 @@ Based on the above content, design entity types and relationship types suitable 
             result["analysis_summary"] = ""
 
         # Validate entity types
+        # Record mapping from original name to PascalCase for updating source_targets in edges
+        entity_name_map = {}
         for entity in result["entity_types"]:
+            # Enforce PascalCase for entity name
+            if "name" in entity:
+                original_name = entity["name"]
+                entity["name"] = _to_pascal_case(original_name)
+                if entity["name"] != original_name:
+                    logger.warning(f"Entity type name '{original_name}' auto-converted to '{entity['name']}'")
+                entity_name_map[original_name] = entity["name"]
             if "attributes" not in entity:
                 entity["attributes"] = []
             if "examples" not in entity:
@@ -277,6 +303,18 @@ Based on the above content, design entity types and relationship types suitable 
 
         # Validate relationship types
         for edge in result["edge_types"]:
+            # Enforce upper case for edge name
+            if "name" in edge:
+                original_name = edge["name"]
+                edge["name"] = original_name.upper()
+                if edge["name"] != original_name:
+                    logger.warning(f"Edge type name '{original_name}' auto-converted to '{edge['name']}'")
+            # Update entity name references in source_targets to match PascalCase conversion
+            for st in edge.get("source_targets", []):
+                if st.get("source") in entity_name_map:
+                    st["source"] = entity_name_map[st["source"]]
+                if st.get("target") in entity_name_map:
+                    st["target"] = entity_name_map[st["target"]]
             if "source_targets" not in edge:
                 edge["source_targets"] = []
             if "attributes" not in edge:
@@ -284,9 +322,21 @@ Based on the above content, design entity types and relationship types suitable 
             if len(edge.get("description", "")) > 100:
                 edge["description"] = edge["description"][:97] + "..."
 
-        # Zep API limit: maximum 10 custom entity types, maximum 10 custom edge types
+        # Maximum 10 custom entity types, maximum 10 custom edge types
         MAX_ENTITY_TYPES = 10
         MAX_EDGE_TYPES = 10
+
+        # Deduplication: remove duplicates by name, keeping first occurrence
+        seen_names = set()
+        deduped = []
+        for entity in result["entity_types"]:
+            name = entity.get("name", "")
+            if name and name not in seen_names:
+                seen_names.add(name)
+                deduped.append(entity)
+            elif name in seen_names:
+                logger.warning(f"Duplicate entity type '{name}' removed during validation")
+        result["entity_types"] = deduped
 
         # Fallback type definitions
         person_fallback = {
