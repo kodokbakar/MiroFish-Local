@@ -34,7 +34,7 @@ Only the orchestrator edits this file.
 | 015 | `fe2fd5b` | CVE-2025-14009 vulnerability in transitive dependency NLTK | bugfix | adapt | low | ported | `6638a69` | Ported and merged via branch kodokbakar/port-015; 127 tests passed. |
 | 016 | `867b54c` | Frontend polling continues endlessly when simulation runner encounters fatal failure | bugfix | adapt | low | pending | | Halts polling on runner failure; adapt English UI string inline |
 | 017 | `8b41460` | Runner failure status masked by platform completion flags in simulation polling | bugfix | adapt | low | pending | | Explicitly prioritizes runner failure over platform completion status |
-| 018 | `a07841e` | TypeError crash (#135) caused by LLM returning string instead of list for ontology attributes | bugfix | adapt | low | pending | | Normalizes string ontology attributes; adapt to GraphStorage |
+| 018 | `a07841e` | TypeError crash (#135) caused by LLM returning string instead of list for ontology attributes | bugfix | adapt | low | ported | `kodokbakar/port-018` | Ported via branch kodokbakar/port-018; 134 tests passed. |
 | 019 | `f0d487f` | Ontology JSON generation crashes on diverse LLM providers with malformed JSON responses | bugfix | adapt | low | pending | | Hardens JSON parsing and provider error handling; adapt to local llm_client |
 | 020 | `e3350a9` | Inconsistent naming casing and duplicate entity types in ontology generation | bugfix | adapt | medium | pending | | Enforces PascalCase entities, uppercase edges, and deduplication |
 | 021 | `f0e936a` | Ontology generator truncates long texts to first chunk, missing critical context | bugfix | adapt | medium | pending | | Multi-chunk document sampling for ontology LLM input |
