@@ -27,7 +27,7 @@ Only the orchestrator edits this file.
 | 008 | `1d96b09` | LLM hallucination in report agent caused by self-generated <tool_result> blocks | bugfix | direct | low | ported | `e3ed1f8` | Ported and merged via branch kodokbakar/port-008; 67 tests passed. |
 | 009 | `f0e3794` | Fabricated tool_result tags across report paths bypass single-point sanitization | bugfix | direct | low | ported | `09e6555` | Ported and merged via branch kodokbakar/port-009; 77 tests passed. |
 | 010 | `41fc932` | Structured LLM output returning dict/list in text fields crashes profile serialization | bugfix | direct | low | ported | `67fae64` | Ported and merged via branch kodokbakar/port-010; 85 tests passed. |
-| 011 | `c81d628` | High severity security vulnerabilities in npm dependencies (axios, vite, concurrently) | bugfix | direct | low | pending | | Updates frontend npm packages to patched versions |
+| 011 | `c81d628` | High severity security vulnerabilities in npm dependencies (axios, vite, concurrently) | bugfix | direct | low | ported | `kodokbakar/port-011` | Ported via branch kodokbakar/port-011; 89 tests passed (3 new). |
 | 012 | `f7138e0` | HTTP 500 error when using GPT-5 family models due to unsupported chat completion params | bugfix | direct | medium | pending | | Adds GPT-5 chat completions parameter compatibility adapter |
 | 013 | `e67a52e` | Broad speculative error handling in GPT-5 compatibility layer causes retry bugs | bugfix | direct | low | pending | | Keeps GPT-5 parameter adaptation narrow and deterministic; adds tests |
 | 014 | `223b283` | Security CVE vulnerabilities in frontend build dependencies (axios, rollup, picomatch) | bugfix | adapt | low | pending | | Upgrade packages without pulling upstream vue-i18n |
