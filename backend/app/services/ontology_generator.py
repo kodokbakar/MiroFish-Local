@@ -197,7 +197,11 @@ class OntologyGenerator:
         result = self.llm_client.chat_json(
             messages=messages,
             temperature=0.3,
-            max_tokens=4096
+            # Structured ontology responses can exceed 4096 completion tokens,
+            # especially when a compatible provider counts hidden reasoning in
+            # the same budget. Let the provider use its model-specific limit.
+            max_tokens=None,
+            max_attempts=2,
         )
 
         # Validate and post-process
