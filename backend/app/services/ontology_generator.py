@@ -267,8 +267,19 @@ Based on the above content, design entity types and relationship types suitable 
 
         # Validate entity types
         for entity in result["entity_types"]:
+            if not isinstance(entity, dict):
+                continue
             if "attributes" not in entity:
                 entity["attributes"] = []
+            elif isinstance(entity["attributes"], str):
+                entity["attributes"] = [entity["attributes"]]
+            elif not isinstance(entity["attributes"], list):
+                entity["attributes"] = []
+            # Normalize attributes: LLM may return strings instead of dicts
+            entity["attributes"] = [
+                attr if isinstance(attr, dict) else {"name": attr, "type": "text", "description": attr}
+                for attr in entity["attributes"]
+            ]
             if "examples" not in entity:
                 entity["examples"] = []
             # Ensure description doesn't exceed 100 characters
@@ -277,13 +288,23 @@ Based on the above content, design entity types and relationship types suitable 
 
         # Validate relationship types
         for edge in result["edge_types"]:
+            if not isinstance(edge, dict):
+                continue
             if "source_targets" not in edge:
                 edge["source_targets"] = []
             if "attributes" not in edge:
                 edge["attributes"] = []
+            elif isinstance(edge["attributes"], str):
+                edge["attributes"] = [edge["attributes"]]
+            elif not isinstance(edge["attributes"], list):
+                edge["attributes"] = []
+            # Normalize attributes: LLM may return strings instead of dicts
+            edge["attributes"] = [
+                attr if isinstance(attr, dict) else {"name": attr, "type": "text", "description": attr}
+                for attr in edge["attributes"]
+            ]
             if len(edge.get("description", "")) > 100:
                 edge["description"] = edge["description"][:97] + "..."
-
         # Zep API limit: maximum 10 custom entity types, maximum 10 custom edge types
         MAX_ENTITY_TYPES = 10
         MAX_EDGE_TYPES = 10
