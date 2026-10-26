@@ -15,7 +15,7 @@ class TestFrontendDependencies(unittest.TestCase):
         self.package_json_path = self.repo_root / "frontend" / "package.json"
 
     def test_frontend_package_json_valid_and_axios_pinned(self):
-        """Verify frontend/package.json is valid JSON and axios is pinned to exact 1.13.2."""
+        """Verify frontend/package.json is valid JSON and axios is pinned to exact 1.18.1."""
         self.assertTrue(
             self.package_json_path.is_file(),
             f"frontend/package.json not found at {self.package_json_path}",
@@ -36,6 +36,6 @@ class TestFrontendDependencies(unittest.TestCase):
         )
         self.assertEqual(
             axios_version,
-            "1.13.2",
-            f"axios must be pinned to exact '1.13.2', got '{axios_version}'",
+            "1.18.1",
+            f"axios must be pinned to exact '1.18.1', got '{axios_version}'",
         )
