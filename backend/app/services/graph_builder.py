@@ -180,6 +180,20 @@ class GraphBuilderService:
         No more dynamic Pydantic class creation (was Zep-specific).
         The NER extractor reads this ontology to guide extraction.
         """
+        if isinstance(ontology, dict):
+            for key in ("entity_types", "edge_types", "relation_types"):
+                type_list = ontology.get(key)
+                if isinstance(type_list, list):
+                    for item in type_list:
+                        if isinstance(item, dict) and "attributes" in item:
+                            attrs = item["attributes"]
+                            if isinstance(attrs, str):
+                                attrs = [attrs]
+                            if isinstance(attrs, list):
+                                item["attributes"] = [
+                                    attr if isinstance(attr, dict) else {"name": attr, "type": "text", "description": attr}
+                                    for attr in attrs
+                                ]
         self.storage.set_ontology(graph_id, ontology)
 
     def add_text_batches(
