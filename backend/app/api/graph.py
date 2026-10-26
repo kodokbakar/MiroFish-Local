@@ -4,6 +4,7 @@ Uses project context mechanism with server-side state persistence
 """
 
 import os
+import re
 import traceback
 import threading
 from flask import request, jsonify, current_app
@@ -17,7 +18,7 @@ from ..utils.file_parser import FileParser
 from ..utils.logger import get_logger
 from ..models.task import TaskManager, TaskStatus
 from ..models.project import ProjectManager, ProjectStatus
-
+from ..utils.llm_client import LLMResponseError
 # Get logger
 logger = get_logger('mirofish.api')
 
@@ -154,6 +155,7 @@ def generate_ontology():
             }
         }
     """
+    project = None
     try:
         logger.info("=== Starting ontology generation ===")
 
@@ -254,13 +256,56 @@ def generate_ontology():
             }
         })
         
-    except Exception as e:
-        logger.error(f"Ontology generation failed: {e}\n{traceback.format_exc()}")
-        return jsonify({
+    except Exception as error:
+        provider_status = getattr(error, "status_code", None)
+        request_id = getattr(error, "request_id", None)
+
+        if isinstance(error, LLMResponseError):
+            public_error = str(error)
+            response_status = 502
+            logger.exception("LLM returned an unusable ontology response")
+        elif isinstance(provider_status, int):
+            public_error = f"LLM provider request failed (HTTP {provider_status})"
+            if request_id:
+                safe_request_id = re.sub(
+                    r"[^a-zA-Z0-9._:-]", "", str(request_id)
+                )[:128]
+                if safe_request_id:
+                    public_error += f" (request_id: {safe_request_id})"
+            response_status = 502
+            # Provider exception bodies may echo request content. Keep the
+            # server log useful without serializing the exception body.
+            logger.error(
+                "Ontology provider request failed: type=%s status=%s request_id=%s",
+                type(error).__name__,
+                provider_status,
+                request_id or "unknown",
+            )
+        else:
+            public_error = "Ontology generation failed; check the server logs"
+            response_status = 500
+            logger.exception("Unexpected ontology generation failure")
+
+        response_data = None
+        if project is not None:
+            project.status = ProjectStatus.FAILED
+            project.error = public_error
+            try:
+                ProjectManager.save_project(project)
+            except Exception:
+                logger.exception(
+                    "Failed to persist ontology failure for project %s",
+                    project.project_id,
+                )
+            response_data = {"project_id": project.project_id}
+
+        payload = {
             "success": False,
-            "error": str(e),
-            "traceback": traceback.format_exc()
-        }), 500
+            "error": public_error,
+        }
+        if response_data is not None:
+            payload["data"] = response_data
+        return jsonify(payload), response_status
 
 
 # ============== Interface 2: Build Graph ==============
