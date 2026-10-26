@@ -516,7 +516,15 @@ const fetchRunStatus = async () => {
       // Check via twitter_completed and reddit_completed status
       const platformsCompleted = checkPlatformsCompleted(data)
 
-      if (isCompleted || platformsCompleted) {
+      // An explicit runner failure is authoritative. Platform completion flags
+      // can be stale or partial when one subprocess exits successfully before
+      // another subprocess fails, so inferred completion must not mask it.
+      if (isFailed) {
+        addLog('✗ Simulation failed' + (data.error ? `: ${data.error}` : ''))
+        phase.value = 2
+        stopPolling()
+        emit('update-status', 'error')
+      } else if (isCompleted || platformsCompleted) {
         if (platformsCompleted && !isCompleted) {
           addLog('✓ Detected all platform simulations have ended')
         }
@@ -524,11 +532,6 @@ const fetchRunStatus = async () => {
         phase.value = 2
         stopPolling()
         emit('update-status', 'completed')
-      } else if (isFailed) {
-        addLog('✗ Simulation failed' + (data.error ? `: ${data.error}` : ''))
-        phase.value = 2
-        stopPolling()
-        emit('update-status', 'error')
       }
     }
   } catch (err) {
