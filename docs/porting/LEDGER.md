@@ -29,7 +29,7 @@ Only the orchestrator edits this file.
 | 010 | `41fc932` | Structured LLM output returning dict/list in text fields crashes profile serialization | bugfix | direct | low | ported | `67fae64` | Ported and merged via branch kodokbakar/port-010; 85 tests passed. |
 | 011 | `c81d628` | High severity security vulnerabilities in npm dependencies (axios, vite, concurrently) | bugfix | direct | low | pending | | Updates frontend npm packages to patched versions |
 | 012 | `f7138e0` | HTTP 500 error when using GPT-5 family models due to unsupported chat completion params | bugfix | direct | medium | pending | | Adds GPT-5 chat completions parameter compatibility adapter |
-| 013 | `e67a52e` | Broad speculative error handling in GPT-5 compatibility layer causes retry bugs | bugfix | direct | low | pending | | Keeps GPT-5 parameter adaptation narrow and deterministic; adds tests |
+| 013 | `e67a52e` | Broad speculative error handling in GPT-5 compatibility layer causes retry bugs | bugfix | direct | low | ported | `kodokbakar/port-013` | Ported via branch kodokbakar/port-013; 96 tests passed (11 new). |
 | 014 | `223b283` | Security CVE vulnerabilities in frontend build dependencies (axios, rollup, picomatch) | bugfix | adapt | low | pending | | Upgrade packages without pulling upstream vue-i18n |
 | 015 | `fe2fd5b` | CVE-2025-14009 vulnerability in transitive dependency NLTK | bugfix | adapt | low | pending | | Upgrade transitive NLTK dependency to 3.10.0 in uv.lock |
 | 016 | `867b54c` | Frontend polling continues endlessly when simulation runner encounters fatal failure | bugfix | adapt | low | pending | | Halts polling on runner failure; adapt English UI string inline |
