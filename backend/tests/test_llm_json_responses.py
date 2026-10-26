@@ -257,3 +257,99 @@ def test_chat_json_reports_missing_choices_without_retrying_forever():
         )
 
     assert len(sequence.calls) == 2
+
+
+@pytest.mark.parametrize(
+    "raw_content,expected",
+    [
+        ('\ufeff{"key": "bom_value"}', {"key": "bom_value"}),
+        ('<think>internal thought\nsecond line</think>{"key": "think_value"}', {"key": "think_value"}),
+        ('```json\n{"key": "fence_json"}\n```', {"key": "fence_json"}),
+        ('```\n{"key": "fence_no_lang"}\n```', {"key": "fence_no_lang"}),
+        ('```JSON\n{"key": "fence_upper"}\n```', {"key": "fence_upper"}),
+        ('<think>thought</think>\ufeff```json\n{"key": "combined"}\n```', {"key": "combined"}),
+        ('  \n```json\n  {"key": "padded"}  \n```\n  ', {"key": "padded"}),
+    ],
+)
+def test_chat_json_parses_bom_think_tags_and_markdown_fences(raw_content, expected):
+    sequence = CompletionSequence(_response(raw_content))
+    client = _client_for(sequence)
+
+    result = client.chat_json(
+        messages=[{"role": "user", "content": "Return JSON"}],
+    )
+    assert result == expected
+
+
+def test_chat_json_single_attempt_truncation_raises_structured_error():
+    sequence = CompletionSequence(_response('{"partial": "data"', finish_reason="length"))
+    client = _client_for(sequence)
+
+    with pytest.raises(LLMResponseError) as captured:
+        client.chat_json(
+            messages=[{"role": "user", "content": "Return JSON"}],
+            max_attempts=1,
+        )
+
+    assert captured.value.finish_reason == "length"
+    assert "truncated at the token limit" in str(captured.value)
+
+
+def test_chat_json_unexpected_finish_reason_raises_structured_error():
+    sequence = CompletionSequence(_response('{"ok": true}', finish_reason="content_filter"))
+    client = _client_for(sequence)
+
+    with pytest.raises(LLMResponseError) as captured:
+        client.chat_json(
+            messages=[{"role": "user", "content": "Return JSON"}],
+            max_attempts=1,
+        )
+
+    assert captured.value.finish_reason == "content_filter"
+    assert "content_filter" in str(captured.value)
+
+
+def test_chat_json_rejects_trailing_json_array():
+    sequence = CompletionSequence(_response('{"status": "ok"}\n[1, 2, 3]'))
+    client = _client_for(sequence)
+
+    with pytest.raises(LLMResponseError, match="multiple JSON"):
+        client.chat_json(
+            messages=[{"role": "user", "content": "Return JSON"}],
+        )
+
+
+def test_chat_json_accepts_trailing_invalid_json_fragment():
+    sequence = CompletionSequence(_response('{"status": "ok"}\nNote: {not valid json'))
+    client = _client_for(sequence)
+
+    result = client.chat_json(
+        messages=[{"role": "user", "content": "Return JSON"}],
+    )
+    assert result == {"status": "ok"}
+
+
+def test_create_completion_ollama_num_ctx_preservation():
+    sequence = CompletionSequence(_response('{"ok": true}'))
+    client = _client_for(sequence)
+    client.base_url = "http://localhost:11434/v1"
+    client._num_ctx = 16384
+
+    res = client.chat_json(
+        messages=[{"role": "user", "content": "Return JSON"}],
+    )
+    assert res == {"ok": True}
+    assert sequence.calls[0].get("extra_body") == {"options": {"num_ctx": 16384}}
+
+
+def test_create_completion_non_ollama_does_not_pass_extra_body():
+    sequence = CompletionSequence(_response('{"ok": true}'))
+    client = _client_for(sequence)
+    client.base_url = "https://api.openai.com/v1"
+    client._num_ctx = 16384
+
+    res = client.chat_json(
+        messages=[{"role": "user", "content": "Return JSON"}],
+    )
+    assert res == {"ok": True}
+    assert "extra_body" not in sequence.calls[0]
