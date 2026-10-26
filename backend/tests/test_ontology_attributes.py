@@ -142,3 +142,120 @@ def test_graph_builder_set_ontology_normalizes_string_attributes():
     assert passed_ontology["relation_types"][0]["attributes"] == [
         {"name": "amount", "type": "text", "description": "amount"},
     ]
+
+
+def test_validate_and_process_scalar_string_attributes():
+    """Scalar string in attributes is normalized into a single-item list with dict."""
+    generator = OntologyGenerator(llm_client=MagicMock())
+    raw = {
+        "entity_types": [
+            {
+                "name": "Influencer",
+                "description": "Key opinion leader",
+                "attributes": "follower_count",
+                "examples": ["KOL_1"]
+            }
+        ],
+        "edge_types": [
+            {
+                "name": "INFLUENCES",
+                "description": "Influence relation",
+                "attributes": "strength",
+                "source_targets": []
+            }
+        ]
+    }
+
+    processed = generator._validate_and_process(raw)
+
+    influencer = next(e for e in processed["entity_types"] if e["name"] == "Influencer")
+    assert influencer["attributes"] == [
+        {"name": "follower_count", "type": "text", "description": "follower_count"}
+    ]
+
+    edge = next(e for e in processed["edge_types"] if e["name"] == "INFLUENCES")
+    assert edge["attributes"] == [
+        {"name": "strength", "type": "text", "description": "strength"}
+    ]
+
+
+def test_validate_and_process_empty_none_and_missing_attributes():
+    """Empty list, None, and omitted attributes default to empty lists without crashing."""
+    generator = OntologyGenerator(llm_client=MagicMock())
+    raw = {
+        "entity_types": [
+            {"name": "EmptyList", "description": "desc", "attributes": []},
+            {"name": "NoneAttr", "description": "desc", "attributes": None},
+            {"name": "MissingAttr", "description": "desc"},
+        ],
+        "edge_types": [
+            {"name": "EMPTY_REL", "description": "desc", "attributes": []},
+            {"name": "NONE_REL", "description": "desc", "attributes": None},
+            {"name": "MISSING_REL", "description": "desc"},
+        ]
+    }
+
+    processed = generator._validate_and_process(raw)
+
+    for name in ("EmptyList", "NoneAttr", "MissingAttr"):
+        entity = next(e for e in processed["entity_types"] if e["name"] == name)
+        assert entity["attributes"] == []
+
+    for name in ("EMPTY_REL", "NONE_REL", "MISSING_REL"):
+        edge = next(e for e in processed["edge_types"] if e["name"] == name)
+        assert edge["attributes"] == []
+
+
+def test_graph_builder_set_ontology_scalar_string_attributes():
+    """GraphBuilderService.set_ontology() normalizes scalar string attributes across entity, edge, and relation types."""
+    mock_storage = MagicMock()
+    service = GraphBuilderService(storage=mock_storage)
+
+    ontology = {
+        "entity_types": [
+            {"name": "Topic", "description": "Subject", "attributes": "topic_id"}
+        ],
+        "edge_types": [
+            {"name": "TAGGED_WITH", "description": "Tagging", "attributes": "confidence"}
+        ],
+        "relation_types": [
+            {"name": "MENTIONS", "description": "Mention", "attributes": "sentiment"}
+        ]
+    }
+
+    service.set_ontology("graph-scalar", ontology)
+
+    passed_ontology = mock_storage.set_ontology.call_args[0][1]
+    assert passed_ontology["entity_types"][0]["attributes"] == [
+        {"name": "topic_id", "type": "text", "description": "topic_id"}
+    ]
+    assert passed_ontology["edge_types"][0]["attributes"] == [
+        {"name": "confidence", "type": "text", "description": "confidence"}
+    ]
+    assert passed_ontology["relation_types"][0]["attributes"] == [
+        {"name": "sentiment", "type": "text", "description": "sentiment"}
+    ]
+
+
+def test_graph_builder_set_ontology_handles_empty_none_and_non_dict_elements():
+    """GraphBuilderService.set_ontology() safely handles empty, None, or non-dict structures."""
+    mock_storage = MagicMock()
+    service = GraphBuilderService(storage=mock_storage)
+
+    ontology = {
+        "entity_types": [
+            {"name": "Normal", "attributes": []},
+            {"name": "NoneAttr", "attributes": None},
+            {"name": "MissingAttr"},
+            "invalid_non_dict_item"
+        ],
+        "edge_types": [
+            {"name": "NormalEdge", "attributes": []},
+            {"name": "NoneEdge", "attributes": None},
+        ],
+        "relation_types": None
+    }
+
+    # Should not raise exception
+    service.set_ontology("graph-edge-cases", ontology)
+    mock_storage.set_ontology.assert_called_once()
