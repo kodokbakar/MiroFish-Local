@@ -11,6 +11,7 @@ from typing import Optional, Dict, Any, List
 from openai import OpenAI
 
 from ..config import Config
+from .openai_chat_compat import create_chat_completion, extract_chat_completion_text
 
 
 class LLMClient:
@@ -63,24 +64,25 @@ class LLMClient:
         Returns:
             Model response text
         """
-        kwargs = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        }
-
-        if response_format:
-            kwargs["response_format"] = response_format
-
+        extra_params = None
         # For Ollama: pass num_ctx via extra_body to prevent prompt truncation
         if self._is_ollama() and self._num_ctx:
-            kwargs["extra_body"] = {
-                "options": {"num_ctx": self._num_ctx}
+            extra_params = {
+                "extra_body": {
+                    "options": {"num_ctx": self._num_ctx}
+                }
             }
 
-        response = self.client.chat.completions.create(**kwargs)
-        content = response.choices[0].message.content
+        response = create_chat_completion(
+            self.client,
+            model=self.model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format=response_format,
+            extra_params=extra_params,
+        )
+        content = extract_chat_completion_text(response)
         # Some models (like MiniMax M2.5) include <think>thinking content in response, need to remove
         content = re.sub(r'<think>[\s\S]*?</think>', '', content).strip()
         return content
