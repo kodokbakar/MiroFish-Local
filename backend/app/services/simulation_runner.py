@@ -333,9 +333,15 @@ class SimulationRunner:
         """
         # Check if already running
         existing = cls.get_run_state(simulation_id)
-        if existing and existing.runner_status in [RunnerStatus.RUNNING, RunnerStatus.STARTING]:
+        is_alive = cls.is_process_alive(simulation_id, existing)
+        if existing and existing.runner_status in [RunnerStatus.RUNNING, RunnerStatus.STARTING] and is_alive:
             raise ValueError(f"Simulation already running: {simulation_id}")
-        
+        elif is_alive:
+            logger.warning(f"Terminating lingering process for simulation {simulation_id} before starting")
+            try:
+                cls.stop_simulation(simulation_id)
+            except Exception as e:
+                logger.warning(f"Error stopping lingering simulation {simulation_id}: {e}")
         # Load simulation config
         sim_dir = os.path.join(cls.RUN_STATE_DIR, simulation_id)
         config_path = os.path.join(sim_dir, "simulation_config.json")
@@ -437,6 +443,15 @@ class SimulationRunner:
             
             # Set working directory to simulation directory (database files etc. will be generated here)
             # Use start_new_session=True to create new process group, ensuring all child processes can be terminated via os.killpg
+            # Terminate any existing process handle in cls._processes[simulation_id] if alive
+            old_proc = cls._processes.get(simulation_id)
+            if old_proc and old_proc.poll() is None:
+                logger.warning(f"Terminating existing process handle before Popen: {simulation_id}")
+                try:
+                    cls._terminate_process(old_proc, simulation_id)
+                except Exception as e:
+                    logger.warning(f"Error terminating existing process handle: {e}")
+
             process = subprocess.Popen(
                 cmd,
                 cwd=sim_dir,
@@ -715,6 +730,127 @@ class SimulationRunner:
         # At least one platform is enabled and completed
         return twitter_enabled or reddit_enabled
     
+    @staticmethod
+    def _is_pid_alive(pid: Optional[int]) -> bool:
+        """
+        Cross-platform check if a process with given PID is alive.
+        Avoids defunct zombies on Unix by checking /proc/{pid}/status.
+        """
+        if pid is None:
+            return False
+        try:
+            pid = int(pid)
+        except (ValueError, TypeError):
+            return False
+        if pid <= 0:
+            return False
+
+        if IS_WINDOWS:
+            try:
+                res = subprocess.run(
+                    ['tasklist', '/FI', f'PID eq {pid}', '/FO', 'CSV', '/NH'],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                return res.returncode == 0 and str(pid) in res.stdout
+            except Exception:
+                return False
+
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return False
+
+        proc_status = f"/proc/{pid}/status"
+        if os.path.exists(proc_status):
+            try:
+                with open(proc_status, "r") as f:
+                    for line in f:
+                        if line.startswith("State:"):
+                            state_val = line.split()[1] if len(line.split()) > 1 else ""
+                            if state_val in ("Z", "X") or "zombie" in line.lower():
+                                return False
+                            break
+            except Exception:
+                return False
+
+        return True
+
+    @classmethod
+    def is_process_alive(cls, simulation_id: str, state: Optional[SimulationRunState] = None) -> bool:
+        """
+        Check if a simulation process is currently alive.
+        Checks in-memory process handle first; if not present, falls back to state.process_pid.
+        """
+        process = cls._processes.get(simulation_id)
+        if process is not None:
+            return process.poll() is None
+
+        if state is None:
+            state = cls.get_run_state(simulation_id)
+
+        if state and state.process_pid:
+            return cls._is_pid_alive(state.process_pid)
+
+        return False
+
+    @classmethod
+    def _terminate_pid(cls, pid: int, simulation_id: str, timeout: int = 10):
+        """
+        Cross-platform terminate process group by PID.
+        """
+        if IS_WINDOWS:
+            logger.info(f"Terminate process tree by PID (Windows): simulation={simulation_id}, pid={pid}")
+            try:
+                subprocess.run(
+                    ['taskkill', '/F', '/PID', str(pid), '/T'],
+                    capture_output=True,
+                    timeout=timeout
+                )
+            except Exception as e:
+                logger.warning(f"taskkill failed for pid={pid}: {e}")
+        else:
+            try:
+                pgid = os.getpgid(pid)
+            except (ProcessLookupError, OSError):
+                pgid = pid
+
+            logger.info(f"Terminate process group by PID (Unix): simulation={simulation_id}, pid={pid}, pgid={pgid}")
+            try:
+                os.killpg(pgid, signal.SIGTERM)
+            except ProcessLookupError:
+                return
+            except OSError as e:
+                logger.warning(f"SIGTERM killpg failed for pgid={pgid}: {e}")
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except OSError:
+                    pass
+
+            start_t = time.time()
+            while time.time() - start_t < timeout:
+                if not cls._is_pid_alive(pid):
+                    return
+                time.sleep(0.1)
+
+            logger.warning(f"Process group {pgid} not responding to SIGTERM, force terminating: {simulation_id}")
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except ProcessLookupError:
+                return
+            except OSError:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except OSError:
+                    pass
+
+            start_t = time.time()
+            while time.time() - start_t < 2:
+                if not cls._is_pid_alive(pid):
+                    return
+                time.sleep(0.1)
+
     @classmethod
     def _terminate_process(cls, process: subprocess.Popen, simulation_id: str, timeout: int = 10):
         """
@@ -777,36 +913,42 @@ class SimulationRunner:
         state = cls.get_run_state(simulation_id)
         if not state:
             raise ValueError(f"Simulation does not exist: {simulation_id}")
-        
-        if state.runner_status not in [RunnerStatus.RUNNING, RunnerStatus.PAUSED]:
+
+        is_alive = cls.is_process_alive(simulation_id, state)
+        if not is_alive and state.runner_status not in [RunnerStatus.RUNNING, RunnerStatus.PAUSED]:
             raise ValueError(f"Simulation not running: {simulation_id}, status={state.runner_status}")
-        
+
         state.runner_status = RunnerStatus.STOPPING
         cls._save_run_state(state)
-        
+
         # Terminate process
         process = cls._processes.get(simulation_id)
         if process and process.poll() is None:
             try:
                 cls._terminate_process(process, simulation_id)
             except ProcessLookupError:
-                # Process no longer exists
                 pass
             except Exception as e:
                 logger.error(f"Failed to terminate process group: {simulation_id}, error={e}")
-                # Fallback to direct process termination
                 try:
                     process.terminate()
                     process.wait(timeout=5)
                 except Exception:
                     process.kill()
-        
+        elif state.process_pid and cls._is_pid_alive(state.process_pid):
+            try:
+                cls._terminate_pid(state.process_pid, simulation_id)
+            except Exception as e:
+                logger.error(f"Failed to terminate process PID {state.process_pid}: {simulation_id}, error={e}")
+
+        cls._processes.pop(simulation_id, None)
+
         state.runner_status = RunnerStatus.STOPPED
         state.twitter_running = False
         state.reddit_running = False
         state.completed_at = datetime.now().isoformat()
         cls._save_run_state(state)
-        
+
         # Stop graph memory updater
         if cls._graph_memory_enabled.get(simulation_id, False):
             try:
@@ -815,7 +957,7 @@ class SimulationRunner:
             except Exception as e:
                 logger.error(f"Failed to stop graph memory updater: {e}")
             cls._graph_memory_enabled.pop(simulation_id, None)
-        
+
         logger.info(f"Simulation stopped: {simulation_id}")
         return state
     
