@@ -13,6 +13,7 @@ from ..config import Config
 from ..models.task import TaskManager, TaskStatus
 from ..storage import GraphStorage
 from .text_processor import TextProcessor
+from ..utils.ontology import normalize_ontology_attribute
 
 logger = logging.getLogger('mirofish.graph_builder')
 
@@ -191,8 +192,9 @@ class GraphBuilderService:
                                 attrs = [attrs]
                             if isinstance(attrs, list):
                                 item["attributes"] = [
-                                    attr if isinstance(attr, dict) else {"name": attr, "type": "text", "description": attr}
+                                    normalized
                                     for attr in attrs
+                                    if (normalized := normalize_ontology_attribute(attr)) is not None
                                 ]
         self.storage.set_ontology(graph_id, ontology)
 
