@@ -37,7 +37,7 @@ Only the orchestrator edits this file.
 | 018 | `a07841e` | TypeError crash (#135) caused by LLM returning string instead of list for ontology attributes | bugfix | adapt | low | ported | `3c0e590` | Ported and merged via branch kodokbakar/port-018; 143 tests passed. |
 | 019 | `f0d487f` | Ontology JSON generation crashes on diverse LLM providers with malformed JSON responses | bugfix | adapt | low | ported | `6d0eac5` | Ported and merged via branch kodokbakar/port-019; 180 tests passed. |
 | 020 | `e3350a9` | Inconsistent naming casing and duplicate entity types in ontology generation | bugfix | adapt | medium | ported | `59508e6` | Ported and merged via branch kodokbakar/port-020; 215 tests passed. |
-| 021 | `f0e936a` | Ontology generator truncates long texts to first chunk, missing critical context | bugfix | adapt | medium | pending | | Multi-chunk document sampling for ontology LLM input |
+| 021 | `f0e936a` | Ontology generator truncates long texts to first chunk, missing critical context | bugfix | adapt | medium | ported | `kodokbakar/port-021` | Ported via branch kodokbakar/port-021; 225 tests passed (10 new). |
 | 022 | `3f4d561` | Unconstrained Python versions lead to build failures on Python 3.13+ | bugfix | adapt | medium | pending | | Constrains requires-python to '>=3.11,<3.13' in pyproject.toml |
 | 023 | `05bea4a` | Step 2 environment setup polling continues after background preparation failure | bugfix | adapt | medium | pending | | Propagates preparation failure to task manager and stops Step 2 polling |
 | 024 | `daec4b6` | Missing type hints in config/logger and missing FileParser.is_supported() helper | refactor | direct | low | pending | | Adds return/arg type hints and FileParser.is_supported() helper |
