@@ -8,7 +8,9 @@ Optimization improvements:
 3. Distinguish between individual entities and abstract group entities
 """
 
+import csv
 import json
+import os
 import random
 import time
 from typing import Dict, Any, List, Optional
@@ -902,21 +904,7 @@ Important:
                     return
 
                 try:
-                    if output_platform == "reddit":
-                        # Reddit JSON format
-                        profiles_data = [p.to_reddit_format() for p in existing_profiles]
-                        with open(realtime_output_path, 'w', encoding='utf-8') as f:
-                            json.dump(profiles_data, f, ensure_ascii=False, indent=2)
-                    else:
-                        # Twitter CSV format
-                        import csv
-                        profiles_data = [p.to_twitter_format() for p in existing_profiles]
-                        if profiles_data:
-                            fieldnames = list(profiles_data[0].keys())
-                            with open(realtime_output_path, 'w', encoding='utf-8', newline='') as f:
-                                writer = csv.DictWriter(f, fieldnames=fieldnames)
-                                writer.writeheader()
-                                writer.writerows(profiles_data)
+                    self.save_profiles(existing_profiles, realtime_output_path, platform=output_platform)
                 except Exception as e:
                     logger.warning(f"Real-time profile save failed: {e}")
         
@@ -1082,40 +1070,51 @@ Important:
         - user_char: Internal use, LLM system prompt, determines how agent thinks and acts
         - description: External display, visible to other users
         """
-        import csv
-
         # Ensure file extension is .csv
         if not file_path.endswith('.csv'):
             file_path = file_path.replace('.json', '.csv')
 
-        with open(file_path, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
+        dir_name = os.path.dirname(file_path)
+        if dir_name:
+            os.makedirs(dir_name, exist_ok=True)
 
-            # Write OASIS required header
-            headers = ['user_id', 'name', 'username', 'user_char', 'description']
-            writer.writerow(headers)
+        temp_path = f"{file_path}.tmp"
+        try:
+            with open(temp_path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
 
-            # Write data rows
-            for idx, profile in enumerate(profiles):
-                # user_char: Complete persona (bio + persona) for LLM system prompt
-                user_char = profile.bio
-                if profile.persona and profile.persona != profile.bio:
-                    user_char = f"{profile.bio} {profile.persona}"
-                # Handle newlines (replace with space in CSV)
-                user_char = user_char.replace('\n', ' ').replace('\r', ' ')
+                # Write OASIS required header
+                headers = ['user_id', 'name', 'username', 'user_char', 'description']
+                writer.writerow(headers)
 
-                # description: Short bio for external display
-                description = profile.bio.replace('\n', ' ').replace('\r', ' ')
+                # Write data rows
+                for idx, profile in enumerate(profiles):
+                    # user_char: Complete persona (bio + persona) for LLM system prompt
+                    user_char = profile.bio
+                    if profile.persona and profile.persona != profile.bio:
+                        user_char = f"{profile.bio} {profile.persona}"
+                    # Handle newlines (replace with space in CSV)
+                    user_char = user_char.replace('\n', ' ').replace('\r', ' ')
 
-                row = [
-                    idx,                    # user_id: Sequential ID starting from 0
-                    profile.name,           # name: Real name
-                    profile.user_name,      # username: Username
-                    user_char,              # user_char: Complete persona (internal LLM use)
-                    description             # description: Short bio (external display)
-                ]
-                writer.writerow(row)
+                    # description: Short bio for external display
+                    description = profile.bio.replace('\n', ' ').replace('\r', ' ')
 
+                    row = [
+                        idx,                    # user_id: Sequential ID starting from 0
+                        profile.name,           # name: Real name
+                        profile.user_name,      # username: Username
+                        user_char,              # user_char: Complete persona (internal LLM use)
+                        description             # description: Short bio (external display)
+                    ]
+                    writer.writerow(row)
+            os.replace(temp_path, file_path)
+        except Exception:
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+            raise
         logger.info(f"Saved {len(profiles)} Twitter profiles to {file_path} (OASIS CSV format)")
     
     def _normalize_gender(self, gender: Optional[str]) -> str:
@@ -1181,9 +1180,22 @@ Important:
                 item["interested_topics"] = profile.interested_topics
             data.append(item)
 
-        with open(file_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        dir_name = os.path.dirname(file_path)
+        if dir_name:
+            os.makedirs(dir_name, exist_ok=True)
 
+        temp_path = f"{file_path}.tmp"
+        try:
+            with open(temp_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            os.replace(temp_path, file_path)
+        except Exception:
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+            raise
         logger.info(f"Saved {len(profiles)} Reddit profiles to {file_path} (JSON format, includes user_id field)")
     
     # Keep old method name as alias for backward compatibility
