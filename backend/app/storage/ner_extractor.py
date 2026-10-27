@@ -10,6 +10,7 @@ import logging
 from typing import Dict, Any, List, Optional
 
 from ..utils.llm_client import LLMClient
+from .label_utils import LABEL_PATTERN, is_valid_label
 
 logger = logging.getLogger('mirofish.ner_extractor')
 
@@ -187,10 +188,14 @@ class NERExtractor:
                 continue
             seen_names.add(name_lower)
 
-            # If ontology has types, warn but keep entities with unknown types
-            if valid_entity_types and etype not in valid_entity_types:
+            # Validate entity type label to prevent Cypher injection
+            if not is_valid_label(etype):
+                logger.warning(
+                    f"Entity '{name}' has invalid label '{etype}', falling back to 'Entity'"
+                )
+                etype = "Entity"
+            elif valid_entity_types and etype not in valid_entity_types:
                 logger.debug(f"Entity '{name}' has type '{etype}' not in ontology, keeping anyway")
-
             cleaned_entities.append({
                 "name": name,
                 "type": etype,

@@ -691,7 +691,14 @@ class GraphToolsService:
         logger.info(f"Getting entities of type {entity_type}...")
 
         # Use optimized label-based query from storage
-        raw_nodes = self.storage.get_nodes_by_label(graph_id, entity_type)
+        try:
+            raw_nodes = self.storage.get_nodes_by_label(graph_id, entity_type)
+        except ValueError as e:
+            logger.warning(f"Invalid entity type '{entity_type}': {e}")
+            return []
+        except Exception as e:
+            logger.warning(f"Failed to get entities of type '{entity_type}': {e}")
+            return []
 
         result = []
         for node in raw_nodes:

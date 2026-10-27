@@ -25,6 +25,14 @@ from .embedding_service import EmbeddingService
 from .ner_extractor import NERExtractor
 from .search_service import SearchService
 from . import neo4j_schema
+from .label_utils import LABEL_PATTERN, validate_label, is_valid_label
+
+__all__ = [
+    "Neo4jStorage",
+    "LABEL_PATTERN",
+    "validate_label",
+    "is_valid_label",
+]
 
 logger = logging.getLogger('mirofish.neo4j_storage')
 
@@ -281,6 +289,7 @@ class Neo4jStorage(GraphStorage):
                 # Add entity type label
                 if etype and etype != "Entity":
                     try:
+                        validate_label(etype)
                         def _add_label(tx, _name_lower=ename.lower()):
                             tx.run(
                                 f"MATCH (n:Entity {{graph_id: $gid, name_lower: $nl}}) SET n:`{etype}`",
@@ -288,9 +297,10 @@ class Neo4jStorage(GraphStorage):
                                 nl=_name_lower,
                             )
                         self._call_with_retry(session.execute_write, _add_label)
+                    except ValueError as e:
+                        logger.warning(f"Skipping invalid entity label '{etype}' for '{ename}': {e}")
                     except Exception as e:
                         logger.warning(f"Failed to add label '{etype}' to '{ename}': {e}")
-
             # Create relations
             for idx, relation in enumerate(relations):
                 source_name = relation["source"]
@@ -438,8 +448,10 @@ class Neo4jStorage(GraphStorage):
             return self._call_with_retry(session.execute_read, _read)
 
     def get_nodes_by_label(self, graph_id: str, label: str) -> List[Dict[str, Any]]:
+        validate_label(label)
+
         def _read(tx):
-            # Dynamic label in query (safe — label comes from ontology, not user input)
+            # Dynamic label in query (safe — validated against LABEL_PATTERN)
             query = f"""
                 MATCH (n:Entity:`{label}` {{graph_id: $gid}})
                 RETURN n, labels(n) AS labels
