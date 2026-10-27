@@ -10,6 +10,7 @@ Covers:
 import csv
 import json
 import os
+import time
 from unittest.mock import patch
 
 import pytest
@@ -250,3 +251,152 @@ def test_atomic_save_creates_parent_directories(generator, tmp_path):
 
     generator._save_reddit_json([profile], str(nested_json))
     assert nested_json.exists()
+
+
+def test_empty_profiles_list_persistence(generator, tmp_path):
+    """Verify empty profile list handles CSV header-only and JSON empty-list persistence gracefully."""
+    csv_path = tmp_path / "empty.csv"
+    generator.save_profiles([], str(csv_path), platform="twitter")
+    assert csv_path.exists()
+    with csv_path.open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.reader(handle))
+    assert len(rows) == 1
+    assert rows[0] == ["user_id", "name", "username", "user_char", "description"]
+
+    json_path = tmp_path / "empty.json"
+    generator.save_profiles([], str(json_path), platform="reddit")
+    assert json_path.exists()
+    with json_path.open(encoding="utf-8") as handle:
+        data = json.load(handle)
+    assert data == []
+
+
+def test_atomic_save_cleans_temp_file_when_no_prior_file_exists(generator, tmp_path):
+    """Verify write failure cleans up .tmp file and creates no target file when no prior file existed."""
+    csv_path = tmp_path / "fresh_twitter.csv"
+    profile = OasisAgentProfile(user_id=1, user_name="u", name="U", bio="B", persona="P")
+    temp_csv = tmp_path / "fresh_twitter.csv.tmp"
+
+    with patch("csv.writer", side_effect=IOError("Disk full")):
+        with pytest.raises(IOError, match="Disk full"):
+            generator._save_twitter_csv([profile], str(csv_path))
+
+    assert not csv_path.exists()
+    assert not temp_csv.exists()
+
+    json_path = tmp_path / "fresh_reddit.json"
+    temp_json = tmp_path / "fresh_reddit.json.tmp"
+
+    with patch("json.dump", side_effect=IOError("Disk full")):
+        with pytest.raises(IOError, match="Disk full"):
+            generator._save_reddit_json([profile], str(json_path))
+
+    assert not json_path.exists()
+    assert not temp_json.exists()
+
+
+def test_parallel_realtime_persistence_race_free(generator, tmp_path):
+    """Verify concurrent thread execution produces valid and complete persistence without race conditions."""
+    total_agents = 8
+    entities = [
+        EntityNode(uuid=f"e{i}", name=f"Agent {i}", labels=["Person"], summary="", attributes={})
+        for i in range(total_agents)
+    ]
+
+    def mock_generate(entity, user_id, use_llm):
+        time.sleep(0.005 * (total_agents - user_id))
+        return OasisAgentProfile(
+            user_id=user_id,
+            user_name=f"agent_{user_id}",
+            name=f"Agent {user_id}",
+            bio=f"Bio for {user_id}",
+            persona=f"Persona for {user_id}",
+            age=25 + user_id,
+            gender="female" if user_id % 2 == 0 else "male",
+            mbti="INTJ",
+            country="US",
+        )
+
+    generator.generate_profile_from_entity = mock_generate
+
+    # Test parallel Twitter CSV persistence
+    csv_path = tmp_path / "parallel_twitter.csv"
+    res_csv = generator.generate_profiles_from_entities(
+        entities=entities,
+        use_llm=False,
+        parallel_count=4,
+        realtime_output_path=str(csv_path),
+        output_platform="twitter",
+    )
+    assert len(res_csv) == total_agents
+    assert csv_path.exists()
+    with csv_path.open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.reader(handle))
+    assert len(rows) == total_agents + 1
+    assert rows[0] == ["user_id", "name", "username", "user_char", "description"]
+    saved_usernames = {row[2] for row in rows[1:]}
+    expected_usernames = {f"agent_{i}" for i in range(total_agents)}
+    assert saved_usernames == expected_usernames
+
+    # Test parallel Reddit JSON persistence
+    json_path = tmp_path / "parallel_reddit.json"
+    res_json = generator.generate_profiles_from_entities(
+        entities=entities,
+        use_llm=False,
+        parallel_count=4,
+        realtime_output_path=str(json_path),
+        output_platform="reddit",
+    )
+    assert len(res_json) == total_agents
+    assert json_path.exists()
+    with json_path.open(encoding="utf-8") as handle:
+        data = json.load(handle)
+    assert len(data) == total_agents
+    saved_ids = {item["user_id"] for item in data}
+    assert saved_ids == set(range(total_agents))
+
+
+def test_multiline_fields_csv_sanitization(generator, tmp_path):
+    """Verify newlines and carriage returns in bio/persona are sanitized for Twitter CSV."""
+    p = OasisAgentProfile(
+        user_id=0,
+        user_name="multi_line_user",
+        name="Multi Line",
+        bio="Line 1\nLine 2\r\nLine 3",
+        persona="Persona Line 1\r\nPersona Line 2",
+    )
+    csv_path = tmp_path / "sanitized.csv"
+    generator.save_profiles([p], str(csv_path), platform="twitter")
+
+    with csv_path.open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.reader(handle))
+
+    assert len(rows) == 2  # Header + 1 row (no multi-line record splitting)
+    user_char = rows[1][3]
+    description = rows[1][4]
+    assert "\n" not in user_char and "\r" not in user_char
+    assert "\n" not in description and "\r" not in description
+    assert "Line 1 Line 2  Line 3 Persona Line 1  Persona Line 2" == user_char
+    assert "Line 1 Line 2  Line 3" == description
+
+
+@pytest.mark.parametrize(
+    "raw_gender,expected",
+    [
+        ("male", "male"),
+        ("MALE", "male"),
+        (" Male ", "male"),
+        ("female", "female"),
+        ("FEMALE", "female"),
+        (" Female ", "female"),
+        ("other", "other"),
+        ("OTHER", "other"),
+        ("non-binary", "other"),
+        ("unknown", "other"),
+        ("", "other"),
+        (None, "other"),
+    ],
+)
+def test_gender_normalization(generator, raw_gender, expected):
+    """Verify gender normalization adheres to OASIS requirements (male, female, other)."""
+    assert generator._normalize_gender(raw_gender) == expected
