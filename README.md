@@ -4,7 +4,7 @@
 
 # MiroFish-Local
 
-**Fully local fork of [MiroFish](https://github.com/666ghj/MiroFish) — no cloud APIs required. English UI.**
+**Local-first multi-agent simulation engine. Forked from [MiroFish-Offline](https://github.com/nikmcfly/MiroFish-Offline) (based on [666ghj/MiroFish](https://github.com/666ghj/MiroFish)) — Full English UI, Neo4j & multi-provider support.**
 
 *A multi-agent swarm intelligence engine that simulates public opinion, market sentiment, and social dynamics. Entirely on your hardware.*
 
@@ -19,7 +19,7 @@
 
 MiroFish is a multi-agent simulation engine: upload any document (press release, policy draft, financial report), and it generates hundreds of AI agents with unique personalities that simulate the public reaction on social media. Posts, arguments, opinion shifts — hour by hour.
 
-The [original MiroFish](https://github.com/666ghj/MiroFish) was built for the Chinese market (Chinese UI, Zep Cloud for knowledge graphs, DashScope API). This fork makes it **fully local and fully English**:
+The [original MiroFish](https://github.com/666ghj/MiroFish) was built for the Chinese market with hard vendor lock-in (Chinese UI, Zep Cloud for graph storage, DashScope API). Forked from [MiroFish-Offline](https://github.com/nikmcfly/MiroFish-Offline), this project provides a **full English interface, local Neo4j graph memory, and flexible multi-provider LLM support**:
 
 | Original MiroFish | MiroFish-Local |
 |---|---|
@@ -27,7 +27,7 @@ The [original MiroFish](https://github.com/666ghj/MiroFish) was built for the Ch
 | Zep Cloud (graph memory) | **Neo4j Community Edition 5.18+** |
 | DashScope / OpenAI API (LLM) | **Ollama / Gemini / DeepSeek / Any OpenAI-compatible API** |
 | Zep Cloud embeddings | **Ollama (nomic-embed-text)**, **Gemini API**, or **OpenAI API** |
-| Cloud API keys required | **Zero cloud lock-in (Local or Custom API Keys)** |
+| Mandatory cloud dependencies | **Zero cloud lock-in (100% self-hosted & offline-capable, or BYOK APIs)** |
 
 ## Workflow
 
@@ -40,7 +40,7 @@ The [original MiroFish](https://github.com/666ghj/MiroFish) was built for the Ch
 ## Screenshot
 
 <div align="center">
-<img src="./static/image/mirofish-offline-screenshot.jpg" alt="MiroFish Local — English UI" width="100%"/>
+<img src="./static/image/mirofish-local-screenshot.png" alt="MiroFish Local — English UI" width="100%"/>
 </div>
 
 ## Quick Start
@@ -48,7 +48,7 @@ The [original MiroFish](https://github.com/666ghj/MiroFish) was built for the Ch
 ### Prerequisites
 
 - Docker & Docker Compose (recommended), **or**
-- Python 3.11+, Node.js 18+, Neo4j 5.18+, Ollama
+- Python 3.11 or 3.12 (Python 3.13+ is not supported due to camel-oasis dependencies), Node.js 18+, Neo4j 5.18+, Ollama
 
 ### Option A: Docker (easiest)
 
@@ -75,7 +75,7 @@ Open `http://localhost:3000` — that's it.
 docker run -d --name neo4j \
   -p 7474:7474 -p 7687:7687 \
   -e NEO4J_AUTH=neo4j/mirofish \
-  neo4j:5.15-community
+  neo4j:5.18-community
 ```
 
 **2. Start Ollama & pull models**
@@ -93,9 +93,13 @@ cp .env.example .env
 # Edit .env if your Neo4j/Ollama are on non-default ports
 
 cd backend
+# Using uv (recommended):
+uv sync
+uv run python run.py
+
+# Or using standard pip:
 pip install -r requirements.txt
 python run.py
-```
 
 **4. Run frontend**
 
@@ -170,7 +174,7 @@ This fork introduces a clean abstraction layer between the application and the g
                │
         ┌──────▼──────┐
         │  Neo4j CE   │
-        │  5.15       │
+        │  5.18+      │
         └─────────────┘
 ```
 
