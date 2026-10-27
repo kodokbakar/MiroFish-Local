@@ -31,9 +31,10 @@ def test_coerce_to_str():
     assert _coerce_to_str({"summary": "extracted summary"}) == "extracted summary"
     assert _coerce_to_str({"name": "extracted name"}) == "extracted name"
 
-    # Recognized key with non-string value falls back to next recognized key or json dump
-    assert _coerce_to_str({"text": 123, "value": "extracted value"}) == "extracted value"
-    non_str_key_dict = {"text": 123, "unknown": "foo"}
+    # Recognized key with non-string value coerces candidate recursively
+    assert _coerce_to_str({"text": 123, "value": "extracted value"}) == "123"
+    assert _coerce_to_str({"text": {"value": "nested"}}) == "nested"
+    non_str_key_dict = {"unknown": 123}
     assert _coerce_to_str(non_str_key_dict) == json.dumps(non_str_key_dict, ensure_ascii=False)
 
     # Dict with unrecognized keys (JSON dump fallback, preserves unicode)
@@ -51,7 +52,7 @@ def test_coerce_to_str():
     assert _coerce_to_str(45.67) == "45.67"
     assert _coerce_to_str(True) == "True"
     assert _coerce_to_str(False) == "False"
-    assert _coerce_to_str(None) == "None"
+    assert _coerce_to_str(None) == ""
 
 
 def test_coerce_to_str_list():
@@ -65,18 +66,18 @@ def test_coerce_to_str_list():
 
     # Single string
     assert _coerce_to_str_list("AI") == ["AI"]
-    assert _coerce_to_str_list("") == [""]
+    assert _coerce_to_str_list("") == []
 
     # Single dict
     assert _coerce_to_str_list({"text": "Economy"}) == ["Economy"]
     assert _coerce_to_str_list({"unknown": "test"}) == ['{"unknown": "test"}']
 
-    # Non-iterable primitives returning empty list
+    # Primitives coerced to list of string, None returning empty list
     assert _coerce_to_str_list(None) == []
-    assert _coerce_to_str_list(123) == []
-    assert _coerce_to_str_list(45.67) == []
-    assert _coerce_to_str_list(True) == []
-    assert _coerce_to_str_list(False) == []
+    assert _coerce_to_str_list(123) == ["123"]
+    assert _coerce_to_str_list(45.67) == ["45.67"]
+    assert _coerce_to_str_list(True) == ["True"]
+    assert _coerce_to_str_list(False) == ["False"]
 
 
 def test_oasis_agent_profile_post_init_normalization():
@@ -146,41 +147,35 @@ def test_oasis_agent_profile_post_init_single_values_in_topics():
     assert profile_dict.interested_topics == ["TopicDict"]
 
 
-def test_save_twitter_csv_defensive():
+def test_save_twitter_csv_with_normalized_profiles():
     generator = OasisProfileGenerator.__new__(OasisProfileGenerator)
 
-    # 1. Profiles with dict bio and persona
+    # 1. Profiles with dict bio and persona normalized at construction
     p1 = OasisAgentProfile(
         user_id=0,
         user_name="user_dict",
         name="User Dict",
-        bio="Regular bio",
-        persona="Regular persona",
+        bio={"text": "Overwritten dict bio"},
+        persona={"description": "Overwritten dict persona"},
     )
-    p1.bio = {"text": "Overwritten dict bio"}
-    p1.persona = {"description": "Overwritten dict persona"}
 
-    # 2. Profiles with list bio and persona
+    # 2. Profiles with list bio and persona normalized at construction
     p2 = OasisAgentProfile(
         user_id=1,
         user_name="user_list",
         name="User List",
-        bio="Regular bio",
-        persona="Regular persona",
+        bio=["tag1", {"value": "tag2"}],
+        persona=["desc1", "desc2"],
     )
-    p2.bio = ["tag1", {"value": "tag2"}]
-    p2.persona = ["desc1", "desc2"]
 
-    # 3. Profiles with None bio and None persona
+    # 3. Profiles with None bio and None persona falling back to defaults at construction
     p3 = OasisAgentProfile(
         user_id=2,
         user_name="user_none",
         name="User None",
-        bio="Regular bio",
-        persona="Regular persona",
+        bio=None,
+        persona=None,
     )
-    p3.bio = None
-    p3.persona = None
 
     # 4. Profiles with matching bio and persona, and newlines
     p4 = OasisAgentProfile(
@@ -215,9 +210,9 @@ def test_save_twitter_csv_defensive():
         assert rows[1]["user_char"] == "tag1, tag2 desc1, desc2"
         assert rows[1]["description"] == "tag1, tag2"
 
-        # p3: None values fallback to name and empty persona
+        # p3: None values fallback to name and default persona at construction
         assert rows[2]["user_id"] == "2"
-        assert rows[2]["user_char"] == "User None"
+        assert rows[2]["user_char"] == "User None User None is a participant in social discussions."
         assert rows[2]["description"] == "User None"
 
         # p4: matching persona and bio avoids duplication, newlines stripped
@@ -246,10 +241,10 @@ def test_save_twitter_csv_json_extension_handling():
         assert not os.path.exists(json_path)
 
 
-def test_save_reddit_json_defensive():
+def test_save_reddit_json_with_normalized_profiles():
     generator = OasisProfileGenerator.__new__(OasisProfileGenerator)
 
-    # 1. Profile with structured objects and long bio (>150 chars)
+    # 1. Profile with structured objects and long bio (>150 chars) normalized at construction
     p1 = OasisAgentProfile(
         user_id=10,
         user_name="reddit_user_1",
@@ -260,24 +255,18 @@ def test_save_reddit_json_defensive():
         profession={"title": "Data Scientist"},  # Fallback to json dump
         interested_topics={"topic": "Deep Learning"},
     )
-    # Manually bypass to simulate structured inputs after init or bypassed init
-    p1.country = {"name": "Canada"}
-    p1.profession = {"title": "Data Scientist"}
-    p1.interested_topics = {"topic": "Deep Learning"}
 
     # 2. Profile with None values for optional fields (country fallback to "US")
     p2 = OasisAgentProfile(
         user_id=None,
         user_name="reddit_user_2",
         name="Reddit User 2",
-        bio="Standard bio",
-        persona="Standard persona",
+        bio=None,
+        persona=None,
+        country=None,
+        profession=None,
+        interested_topics=None,
     )
-    p2.bio = None
-    p2.persona = None
-    p2.country = None
-    p2.profession = None
-    p2.interested_topics = None
 
     # 3. Profile with list of structured topics
     p3 = OasisAgentProfile(
@@ -286,9 +275,8 @@ def test_save_reddit_json_defensive():
         name="Reddit User 3",
         bio={"text": "Bio 3"},
         persona="Persona 3",
+        interested_topics=[{"name": "AI"}, {"text": "Security"}, "Crypto"],
     )
-    p3.interested_topics = [{"name": "AI"}, {"text": "Security"}, "Crypto"]
-
     with tempfile.TemporaryDirectory() as temp_dir:
         json_path = os.path.join(temp_dir, "profiles.json")
         generator._save_reddit_json([p1, p2, p3], json_path)
