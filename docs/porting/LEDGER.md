@@ -42,7 +42,7 @@ Only the orchestrator edits this file.
 | 023 | `05bea4a` | Step 2 environment setup polling continues after background preparation failure | bugfix | adapt | medium | ported | `473d16b` | Ported and merged via branch kodokbakar/port-023; 245 tests passed. |
 | 024 | `daec4b6` | Missing type hints in config/logger and missing FileParser.is_supported() helper | refactor | direct | low | ported | `0f2c83f` | Ported and merged via branch kodokbakar/port-024; 281 tests passed. |
 | 025 | `9f80ad6` | Field normalization scattered across profile generation rather than centralized | refactor | direct | low | ported | `64dbd49` | Ported and merged via branch kodokbakar/port-025; 290 tests passed. |
-| 026 | `9506e6f` | Ontology attribute normalization duplicated across graph builder and generator | refactor | adapt | low | pending | | Centralizes ontology attribute normalization in utility module |
+| 026 | `9506e6f` | Ontology attribute normalization duplicated across graph builder and generator | refactor | adapt | low | ported | `kodokbakar/port-026` | Ported via branch kodokbakar/port-026; 301 tests passed. Ready for integration. |
 
 ## Skipped (with reason)
 | Upstream commit | Reason |

@@ -9,6 +9,7 @@ import re
 from typing import Dict, Any, List, Optional
 from ..utils.llm_client import LLMClient
 from ..utils.file_parser import split_text_into_chunks
+from ..utils.ontology import normalize_ontology_attribute
 
 logger = logging.getLogger(__name__)
 
@@ -442,8 +443,9 @@ Based on the above content, design entity types and relationship types suitable 
                 entity["attributes"] = []
             # Normalize attributes: LLM may return strings instead of dicts
             entity["attributes"] = [
-                attr if isinstance(attr, dict) else {"name": attr, "type": "text", "description": attr}
+                normalized
                 for attr in entity["attributes"]
+                if (normalized := normalize_ontology_attribute(attr)) is not None
             ]
             if "examples" not in entity:
                 entity["examples"] = []
@@ -477,8 +479,9 @@ Based on the above content, design entity types and relationship types suitable 
                 edge["attributes"] = []
             # Normalize attributes: LLM may return strings instead of dicts
             edge["attributes"] = [
-                attr if isinstance(attr, dict) else {"name": attr, "type": "text", "description": attr}
+                normalized
                 for attr in edge["attributes"]
+                if (normalized := normalize_ontology_attribute(attr)) is not None
             ]
             if len(edge.get("description", "")) > 100:
                 edge["description"] = edge["description"][:97] + "..."
