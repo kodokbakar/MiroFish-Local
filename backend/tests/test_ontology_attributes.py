@@ -4,11 +4,18 @@ Ensures string attributes returned by LLMs are normalized into dicts with
 name, type, and description fields across OntologyGenerator and GraphBuilderService.
 """
 
+import sys
+from pathlib import Path
+
+# Ensure local backend directory takes precedence over site-packages
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from unittest.mock import MagicMock
 import pytest
 
 from app.services.ontology_generator import OntologyGenerator
 from app.services.graph_builder import GraphBuilderService
+from app.utils.ontology import normalize_ontology_attribute
 
 
 def test_validate_and_process_string_attributes():
@@ -259,3 +266,59 @@ def test_graph_builder_set_ontology_handles_empty_none_and_non_dict_elements():
     # Should not raise exception
     service.set_ontology("graph-edge-cases", ontology)
     mock_storage.set_ontology.assert_called_once()
+
+
+def test_normalize_string_attribute():
+    assert normalize_ontology_attribute("role") == {
+        "name": "role",
+        "type": "text",
+        "description": "role",
+    }
+
+
+def test_preserve_valid_dictionary_attribute():
+    original = {"name": "role", "type": "text", "description": "Public role"}
+    assert normalize_ontology_attribute(original) == original
+    assert normalize_ontology_attribute(original) is not original
+
+
+def test_reject_unusable_attribute_shapes():
+    for value in (None, 7, [], {}, {"name": None}, {"name": ""}, "   "):
+        assert normalize_ontology_attribute(value) is None
+
+
+def test_generator_normalizes_entity_and_edge_attributes():
+    result = OntologyGenerator(llm_client=MagicMock())._validate_and_process({
+        "entity_types": [{"name": "speaker", "attributes": ["role", None]}],
+        "edge_types": [{"name": "quotes", "attributes": ["source_url", {}]}],
+    })
+
+    assert result["entity_types"][0]["attributes"] == [{
+        "name": "role",
+        "type": "text",
+        "description": "role",
+    }]
+    assert result["edge_types"][0]["attributes"] == [{
+        "name": "source_url",
+        "type": "text",
+        "description": "source_url",
+    }]
+
+
+def test_graph_builder_safety_net_accepts_strings_and_skips_invalid_values():
+    mock_storage = MagicMock()
+    service = GraphBuilderService(storage=mock_storage)
+    service.set_ontology("graph-id", {
+        "entity_types": [{
+            "name": "Speaker",
+            "attributes": ["role", None, {"name": "summary"}],
+        }],
+        "edge_types": [],
+    })
+
+    mock_storage.set_ontology.assert_called_once()
+    passed = mock_storage.set_ontology.call_args[0][1]
+    assert passed["entity_types"][0]["attributes"] == [
+        {"name": "role", "type": "text", "description": "role"},
+        {"name": "summary", "description": "summary"},
+    ]
