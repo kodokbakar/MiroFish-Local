@@ -43,7 +43,7 @@ Only the orchestrator edits this file.
 | 024 | `daec4b6` | Missing type hints in config/logger and missing FileParser.is_supported() helper | refactor | direct | low | ported | `0f2c83f` | Ported and merged via branch kodokbakar/port-024; 281 tests passed. |
 | 025 | `9f80ad6` | Field normalization scattered across profile generation rather than centralized | refactor | direct | low | ported | `64dbd49` | Ported and merged via branch kodokbakar/port-025; 290 tests passed. |
 | 026 | `9506e6f` | Ontology attribute normalization duplicated across graph builder and generator | refactor | adapt | low | ported | `c5c2864` | Ported and merged via branch kodokbakar/port-026; 300 tests passed. |
-| 027 | - | Issue #4: Unkillable zombie subprocesses and IPC hijacking due to invalid status check in stop_simulation | bugfix | direct | medium | in-progress | kodokbakar/unkillable-zombie-subprocesses-and-ipc-hijacking | In progress. |
+| 027 | - | Issue #4: Unkillable zombie subprocesses and IPC hijacking due to invalid status check in stop_simulation | bugfix | direct | medium | ported | `1755abe` | Fixed and tested on branch kodokbakar/unkillable-zombie-subprocesses-and-ipc-hijacking; 317 tests passed. |
 
 ## Skipped (with reason)
 | Upstream commit | Reason |
