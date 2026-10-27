@@ -375,3 +375,165 @@ def test_api_start_without_force_rejects_restart_with_400_when_process_is_alive(
         assert not mock_stop.called
         assert not mock_cleanup.called
         assert not mock_start.called
+
+
+# ============================================================================
+# 6. Additional Edge Cases: Dead PID, Invalid/Negative PID, Missing State File
+# ============================================================================
+
+def test_is_pid_alive_negative_and_non_numeric_variations():
+    """_is_pid_alive returns False for various non-numeric, negative, and malformed inputs."""
+    # Negative integers and string representations
+    assert SimulationRunner._is_pid_alive(-1) is False
+    assert SimulationRunner._is_pid_alive(-9999) is False
+    assert SimulationRunner._is_pid_alive("-1") is False
+    assert SimulationRunner._is_pid_alive("-500") is False
+    assert SimulationRunner._is_pid_alive(0) is False
+    assert SimulationRunner._is_pid_alive("0") is False
+
+    # Non-numeric strings and invalid types
+    assert SimulationRunner._is_pid_alive("") is False
+    assert SimulationRunner._is_pid_alive("   ") is False
+    assert SimulationRunner._is_pid_alive("abc") is False
+    assert SimulationRunner._is_pid_alive("3.14") is False
+    assert SimulationRunner._is_pid_alive([]) is False
+    assert SimulationRunner._is_pid_alive({}) is False
+    assert SimulationRunner._is_pid_alive(()) is False
+    assert SimulationRunner._is_pid_alive(object()) is False
+
+    # Valid numeric string of alive process should return True
+    assert SimulationRunner._is_pid_alive(str(os.getpid())) is True
+
+
+def test_is_process_alive_when_state_file_does_not_exist(clean_simulation_runner):
+    """is_process_alive returns False when run_state.json does not exist on disk."""
+    sim_id = "sim_non_existent"
+    # Ensure completely absent from memory and disk
+    assert sim_id not in SimulationRunner._processes
+    assert sim_id not in SimulationRunner._run_states
+
+    assert SimulationRunner.is_process_alive(sim_id) is False
+
+    # Test loading state from disk on-demand if run_state.json exists
+    state = SimulationRunState(
+        simulation_id=sim_id,
+        runner_status=RunnerStatus.RUNNING,
+        process_pid=65432,
+    )
+    SimulationRunner._save_run_state(state)
+    SimulationRunner._run_states.clear()  # Evict from in-memory cache
+
+    with patch.object(SimulationRunner, "_is_pid_alive", return_value=True) as mock_alive:
+        assert SimulationRunner.is_process_alive(sim_id) is True
+        mock_alive.assert_called_once_with(65432)
+
+
+def test_terminate_pid_when_process_already_dead_unix():
+    """_terminate_pid returns immediately without calling SIGKILL when process is already dead."""
+    pid = 98765
+    sim_id = "sim_already_dead"
+
+    killpg_calls = []
+
+    def mock_killpg(pgid, sig):
+        killpg_calls.append((pgid, sig))
+        # Raise ProcessLookupError as process no longer exists
+        raise ProcessLookupError("No such process")
+
+    with patch("os.getpgid", side_effect=ProcessLookupError), \
+         patch("os.killpg", side_effect=mock_killpg), \
+         patch.object(SimulationRunner, "_is_pid_alive", return_value=False):
+        SimulationRunner._terminate_pid(pid, sim_id, timeout=10)
+
+    # Only initial SIGTERM attempted; returns immediately without escalating to SIGKILL
+    assert killpg_calls == [(pid, signal.SIGTERM)]
+
+
+def test_terminate_pid_when_process_dies_after_first_check():
+    """_terminate_pid exits immediately when _is_pid_alive returns False on initial loop check."""
+    pid = 98766
+    sim_id = "sim_dies_fast"
+
+    killpg_calls = []
+
+    def mock_killpg(pgid, sig):
+        killpg_calls.append((pgid, sig))
+
+    with patch("os.getpgid", return_value=pid), \
+         patch("os.killpg", side_effect=mock_killpg), \
+         patch.object(SimulationRunner, "_is_pid_alive", return_value=False):
+        SimulationRunner._terminate_pid(pid, sim_id, timeout=10)
+
+    # SIGTERM was sent, process was already dead on first while check, so no SIGKILL sent
+    assert killpg_calls == [(pid, signal.SIGTERM)]
+
+
+def test_terminate_pid_windows_error_handled():
+    """_terminate_pid catches taskkill exceptions on Windows without raising."""
+    from app.services import simulation_runner
+
+    with patch.object(simulation_runner, "IS_WINDOWS", True), \
+         patch("subprocess.run", side_effect=Exception("Process not found")):
+        # Should catch exception and not raise
+        SimulationRunner._terminate_pid(1234, "sim_win_err", timeout=5)
+
+
+def test_api_stop_completed_simulation_with_alive_process(app_client, clean_simulation_runner):
+    """/api/simulation/stop stops a COMPLETED simulation if its process is still alive."""
+    sim_id = "sim_api_stop_completed"
+    _setup_simulation_dir(clean_simulation_runner, sim_id)
+
+    manager = SimulationManager()
+    mgr_state = SimulationState(
+        simulation_id=sim_id,
+        project_id="proj_test",
+        graph_id="graph_test",
+        status=SimulationStatus.COMPLETED,
+    )
+    manager._save_simulation_state(mgr_state)
+
+    run_state = SimulationRunState(
+        simulation_id=sim_id,
+        runner_status=RunnerStatus.COMPLETED,
+        process_pid=54321,
+    )
+    SimulationRunner._save_run_state(run_state)
+
+    with patch.object(SimulationRunner, "is_process_alive", return_value=True), \
+         patch.object(SimulationRunner, "_is_pid_alive", return_value=True), \
+         patch.object(SimulationRunner, "_terminate_pid") as mock_term_pid:
+        resp = app_client.post("/api/simulation/stop", json={"simulation_id": sim_id})
+
+        assert resp.status_code == 200
+        assert resp.json["success"] is True
+        assert resp.json["data"]["runner_status"] == "stopped"
+        mock_term_pid.assert_called_once_with(54321, sim_id)
+
+
+def test_api_stop_completed_simulation_with_dead_process_fails(app_client, clean_simulation_runner):
+    """/api/simulation/stop rejects stopping a COMPLETED simulation if process is dead."""
+    sim_id = "sim_api_stop_dead"
+    _setup_simulation_dir(clean_simulation_runner, sim_id)
+
+    manager = SimulationManager()
+    mgr_state = SimulationState(
+        simulation_id=sim_id,
+        project_id="proj_test",
+        graph_id="graph_test",
+        status=SimulationStatus.COMPLETED,
+    )
+    manager._save_simulation_state(mgr_state)
+
+    run_state = SimulationRunState(
+        simulation_id=sim_id,
+        runner_status=RunnerStatus.COMPLETED,
+        process_pid=54322,
+    )
+    SimulationRunner._save_run_state(run_state)
+
+    with patch.object(SimulationRunner, "is_process_alive", return_value=False):
+        resp = app_client.post("/api/simulation/stop", json={"simulation_id": sim_id})
+
+        assert resp.status_code == 400
+        assert resp.json["success"] is False
+        assert "Simulation not running" in resp.json["error"]
