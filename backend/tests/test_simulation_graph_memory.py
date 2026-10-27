@@ -4,6 +4,7 @@ Tests for Knowledge Graph Memory Updates during simulation (Issue #3).
 Covers:
 - SimulationRunner.is_graph_memory_enabled()
 - SimulationRunner.start_simulation() storage parameter validation & updater handling
+- SimulationRunner._read_action_log() activity forwarding to graph memory updater
 - POST /api/simulation/start endpoint storage injection and error handling
 """
 
@@ -12,6 +13,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from app import create_app
+from app.models.project import ProjectManager
 from app.services.simulation_manager import (
     SimulationManager,
     SimulationState,
@@ -158,7 +160,88 @@ def test_start_simulation_success_enables_graph_memory(tmp_path, monkeypatch):
 
 
 # ============================================================================
-# 3. API endpoint tests for POST /api/simulation/start
+# 3. Unit tests for SimulationRunner._read_action_log
+# ============================================================================
+
+def test_read_action_log_forwards_to_updater_when_enabled(tmp_path, monkeypatch):
+    """When graph memory is enabled, _read_action_log forwards action dicts to graph_updater.add_activity_from_dict."""
+    sim_id = "sim_action_log_enabled"
+    log_file = tmp_path / "actions.jsonl"
+
+    action_1 = {
+        "round": 1,
+        "agent_id": 10,
+        "agent_name": "agent_alpha",
+        "action_type": "post",
+        "action_args": {"content": "First post"},
+        "result": "created",
+        "success": True,
+    }
+    action_2 = {
+        "round": 2,
+        "agent_id": 20,
+        "agent_name": "agent_beta",
+        "action_type": "like",
+        "action_args": {"post_id": 123},
+        "result": "liked",
+        "success": True,
+    }
+    lines = [
+        json.dumps({"event_type": "round_end", "round": 1}),
+        json.dumps(action_1),
+        "invalid json line",
+        json.dumps(action_2),
+        json.dumps({"event_type": "simulation_end", "total_rounds": 2, "total_actions": 2}),
+    ]
+    log_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    state = SimulationRunState(simulation_id=sim_id, runner_status=RunnerStatus.RUNNING)
+    SimulationRunner._graph_memory_enabled[sim_id] = True
+
+    mock_updater = MagicMock()
+    monkeypatch.setattr(GraphMemoryManager, "get_updater", lambda sid: mock_updater if sid == sim_id else None)
+
+    new_pos = SimulationRunner._read_action_log(str(log_file), 0, state, "twitter")
+
+    assert new_pos > 0
+    assert mock_updater.add_activity_from_dict.call_count == 2
+    mock_updater.add_activity_from_dict.assert_any_call(action_1, "twitter")
+    mock_updater.add_activity_from_dict.assert_any_call(action_2, "twitter")
+    assert len(state.recent_actions) == 2
+    assert state.current_round == 2
+
+
+def test_read_action_log_does_not_forward_when_disabled(tmp_path, monkeypatch):
+    """When graph memory is disabled, _read_action_log does NOT forward actions to graph updater."""
+    sim_id = "sim_action_log_disabled"
+    log_file = tmp_path / "actions.jsonl"
+
+    action_data = {
+        "round": 1,
+        "agent_id": 15,
+        "agent_name": "agent_gamma",
+        "action_type": "comment",
+        "action_args": {"content": "Nice post"},
+        "result": "commented",
+        "success": True,
+    }
+    log_file.write_text(json.dumps(action_data) + "\n", encoding="utf-8")
+
+    state = SimulationRunState(simulation_id=sim_id, runner_status=RunnerStatus.RUNNING)
+    SimulationRunner._graph_memory_enabled[sim_id] = False
+
+    mock_get_updater = MagicMock()
+    monkeypatch.setattr(GraphMemoryManager, "get_updater", mock_get_updater)
+
+    new_pos = SimulationRunner._read_action_log(str(log_file), 0, state, "reddit")
+
+    assert new_pos > 0
+    mock_get_updater.assert_not_called()
+    assert len(state.recent_actions) == 1
+
+
+# ============================================================================
+# 4. API endpoint tests for POST /api/simulation/start
 # ============================================================================
 
 def _setup_flask_app_with_sim(monkeypatch, sim_id="sim_api_test", graph_id="graph_api_test", status=SimulationStatus.READY):
@@ -303,3 +386,24 @@ def test_start_endpoint_reflects_actual_runner_state_when_updater_fails(monkeypa
     assert response.status_code == 200
     data = response.json["data"]
     assert data["graph_memory_update_enabled"] is False
+
+
+def test_start_endpoint_returns_400_when_graph_id_missing(monkeypatch):
+    """POST /api/simulation/start with enable_graph_memory_update=True returns 400 when graph_id is missing."""
+    sim_id = "sim_no_graph_endpoint"
+    app, _ = _setup_flask_app_with_sim(monkeypatch, sim_id=sim_id, graph_id=None)
+    monkeypatch.setattr(ProjectManager, "get_project", lambda pid: None)
+    app.extensions["neo4j_storage"] = MagicMock()
+
+    client = app.test_client()
+    response = client.post(
+        "/api/simulation/start",
+        json={
+            "simulation_id": sim_id,
+            "enable_graph_memory_update": True,
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json["success"] is False
+    assert "valid graph_id" in response.json["error"]
