@@ -1619,9 +1619,17 @@ def start_simulation():
                     "error": f"Simulation not ready. Current status: {state.status.value}. Please call /prepare first"
                 }), 400
         
-        # Get knowledge graphID（For knowledge graph memory update）
+        # Get knowledge graphID and storage（For knowledge graph memory update）
         graph_id = None
+        storage = None
         if enable_graph_memory_update:
+            storage = current_app.extensions.get('neo4j_storage')
+            if not storage:
+                return jsonify({
+                    "success": False,
+                    "error": "GraphStorage not initialized — check Neo4j connection"
+                }), 500
+
             # Get from simulation status or project graph_id
             graph_id = state.graph_id
             if not graph_id:
@@ -1644,7 +1652,8 @@ def start_simulation():
             platform=platform,
             max_rounds=max_rounds,
             enable_graph_memory_update=enable_graph_memory_update,
-            graph_id=graph_id
+            graph_id=graph_id,
+            storage=storage
         )
         
         # Update simulation status
@@ -1654,7 +1663,7 @@ def start_simulation():
         response_data = run_state.to_dict()
         if max_rounds:
             response_data['max_rounds_applied'] = max_rounds
-        response_data['graph_memory_update_enabled'] = enable_graph_memory_update
+        response_data['graph_memory_update_enabled'] = SimulationRunner.is_graph_memory_enabled(simulation_id)
         response_data['force_restarted'] = force_restarted
         if enable_graph_memory_update:
             response_data['graph_id'] = graph_id
