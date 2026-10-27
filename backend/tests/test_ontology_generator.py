@@ -1,5 +1,5 @@
 """
-Unit tests for ontology generator, casing, remapping, deduplication, and fallback limits (ports 019 & 020).
+Unit tests for ontology generator, casing, remapping, deduplication, fallback limits, and long-text sampling (ports 019, 020, 021).
 """
 
 import logging
@@ -376,3 +376,92 @@ class TestOntologyGeneratorValidateAndProcess:
         assert edge["description"].endswith("...")
         assert edge["source_targets"] == []
         assert edge["attributes"] == []
+
+
+def _generator_for_test() -> OntologyGenerator:
+    generator = OntologyGenerator(llm_client=object())
+    generator.MAX_TEXT_LENGTH_FOR_LLM = 2000
+    generator.LONG_TEXT_CHUNK_SIZE = 500
+    generator.LONG_TEXT_CHUNK_OVERLAP = 0
+    generator.MAX_LONG_TEXT_CHUNKS = 3
+    generator.MIN_LONG_TEXT_EXCERPT = 120
+    return generator
+
+
+def test_short_ontology_context_keeps_original_text():
+    generator = _generator_for_test()
+
+    context = generator._build_document_context(["short document body"])
+
+    assert context == "short document body"
+    assert "[Long Document Automatic Chunk Summary]" not in context
+
+
+def test_long_ontology_context_samples_across_document():
+    generator = _generator_for_test()
+    long_text = "BEGIN" + ("a" * 1050) + "MIDDLE" + ("b" * 1050) + "END"
+
+    context = generator._build_document_context([long_text])
+
+    assert len(context) <= generator.MAX_TEXT_LENGTH_FOR_LLM
+    assert "[Long Document Automatic Chunk Summary]" in context
+    assert "BEGIN" in context
+    assert "MIDDLE" in context
+    assert "END" in context
+    assert "Chunk 1/" in context
+    assert "Chunk 3/" in context
+    assert "Chunk 5/" in context
+
+
+def test_very_long_ontology_context_selects_representative_chunks():
+    generator = _generator_for_test()
+    chunks = ["BEGIN"] + [
+        f"CHUNK{i:02d}-" + (str(i) * 490)
+        for i in range(12)
+    ] + ["FINALEND"]
+    long_text = "".join(chunks)
+
+    context = generator._build_document_context([long_text])
+
+    assert len(context) <= generator.MAX_TEXT_LENGTH_FOR_LLM
+    assert "BEGIN" in context
+    assert "FINALEND" in context
+    assert context.count("--- Document 1 / Chunk") == generator.MAX_LONG_TEXT_CHUNKS
+
+
+def test_ontology_context_compression_loop_reduces_excerpt_budget():
+    generator = _generator_for_test()
+    generator.MAX_TEXT_LENGTH_FOR_LLM = 500
+    generator.MIN_LONG_TEXT_EXCERPT = 40
+    generator.MAX_LONG_TEXT_CHUNKS = 1
+
+    render_calls = []
+    original_render = generator._render_chunked_context
+
+    def spy_render(*args, **kwargs):
+        render_calls.append(kwargs["excerpt_limit"])
+        return original_render(*args, **kwargs)
+
+    generator._render_chunked_context = spy_render
+
+    with pytest.MonkeyPatch().context() as mp:
+        mp.setattr(generator, "_calculate_excerpt_budget", lambda count: 150)
+        context = generator._build_document_context(["A" * 2000])
+
+    assert len(render_calls) > 1
+    assert render_calls[0] > render_calls[1]
+    assert len(context) <= generator.MAX_TEXT_LENGTH_FOR_LLM
+    assert "...(chunked context compressed within ontology analysis length limit)..." not in context
+
+
+def test_ontology_context_fallback_truncation_when_exceeding_limit():
+    generator = _generator_for_test()
+    generator.MAX_TEXT_LENGTH_FOR_LLM = 350
+    generator.MIN_LONG_TEXT_EXCERPT = 40
+    generator.MAX_LONG_TEXT_CHUNKS = 1
+
+    long_text = "BEGIN" + ("x" * 2000) + "END"
+    context = generator._build_document_context([long_text])
+
+    assert len(context) == generator.MAX_TEXT_LENGTH_FOR_LLM
+    assert "...(chunked context compressed within ontology analysis length limit)..." in context
