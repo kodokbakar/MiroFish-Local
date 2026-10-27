@@ -35,6 +35,11 @@ class TestLabelValidation:
         "A",
         "a",
         "123",  # string consisting of digits is allowed by ^[A-Za-z0-9_]+$
+        "1st_Class",  # leading digit
+        "0_zero",
+        "_",  # single underscore
+        "___",
+        "A" * 10000,  # extremely long valid label
     ])
     def test_valid_labels_accepted(self, valid_label):
         assert is_valid_label(valid_label) is True
@@ -77,6 +82,21 @@ class TestLabelValidation:
         ([], "list type"),
         ({}, "dict type"),
         (True, "boolean type"),
+        # Null bytes
+        ("Person\x00", "null byte suffix"),
+        ("\x00Person", "null byte prefix"),
+        ("\x00", "lone null byte"),
+        # Unicode spoofing and control characters
+        ("Person\u200b", "zero-width space"),
+        ("Person\u202e", "right-to-left override"),
+        ("Рerson", "cyrillic homoglyph"),
+        ("Ｐｅｒｓｏｎ", "fullwidth characters"),
+        ("Person\ufeff", "byte order mark"),
+        ("Person\x07", "bell control character"),
+        ("\x1b[31mPerson\x1b[0m", "ANSI escape sequence"),
+        # Extremely long invalid strings
+        ("A" * 10000 + "`", "extremely long string with backtick"),
+        ("A" * 10000 + "\x00", "extremely long string with null byte"),
     ])
     def test_invalid_labels_rejected(self, invalid_label, reason):
         assert is_valid_label(invalid_label) is False, f"Failed for {reason}: {invalid_label!r}"
@@ -105,6 +125,10 @@ class TestNeo4jStorageGetNodesByLabel:
         "Person Name",
         "Person:Admin",
         "Person\nWHERE 1=1",
+        "Person\x00",
+        "Рerson",
+        "Person\u200b",
+        "A" * 10000 + "\x00",
     ])
     def test_get_nodes_by_label_raises_value_error_on_injection(self, payload):
         storage = self._create_storage_without_init()
@@ -135,6 +159,24 @@ class TestNeo4jStorageGetNodesByLabel:
         mock_tx.run.assert_called_once()
         query_executed = mock_tx.run.call_args[0][0]
         assert "MATCH (n:Entity:`Person` {graph_id: $gid})" in query_executed
+
+    @pytest.mark.parametrize("valid_label", [
+        "1st_Class",
+        "_leading_underscore",
+    ])
+    def test_get_nodes_by_label_executes_query_on_leading_digits_and_underscores(self, valid_label):
+        storage = self._create_storage_without_init()
+        mock_session = MagicMock()
+        storage._driver.session.return_value.__enter__.return_value = mock_session
+        mock_tx = MagicMock()
+        mock_tx.run.return_value = []
+        mock_session.execute_read.side_effect = lambda tx_fn: tx_fn(mock_tx)
+        storage._call_with_retry = lambda func, *args, **kwargs: func(*args, **kwargs)
+
+        storage.get_nodes_by_label("test_graph", valid_label)
+        mock_tx.run.assert_called_once()
+        query_executed = mock_tx.run.call_args[0][0]
+        assert f"MATCH (n:Entity:`{valid_label}` {{graph_id: $gid}})" in query_executed
 
 
 # ====================================================================
@@ -219,6 +261,66 @@ class TestNeo4jStorageAddText:
         executed_queries = [call[0][0] for call in mock_tx.run.call_args_list]
         assert any("SET n:`Person`" in q for q in executed_queries)
 
+    def test_add_text_batch_mixed_valid_and_invalid_labels(self):
+        storage = self._create_mocked_storage()
+        storage.get_ontology = MagicMock(return_value={})
+
+        entities = [
+            {"name": "Alice", "type": "Person", "attributes": {}},
+            {"name": "Bad1", "type": "Person` ON MATCH SET n.injected = true //", "attributes": {}},
+            {"name": "Acme", "type": "1st_Company", "attributes": {}},
+            {"name": "Bad2", "type": "Bad\x00Type", "attributes": {}},
+            {"name": "Internal", "type": "_System_Node", "attributes": {}},
+            {"name": "Bad3", "type": "Рerson", "attributes": {}},
+        ]
+        relations = [
+            {"source": "Alice", "target": "Acme", "type": "WORKS_AT", "fact": "Alice works at Acme"},
+            {"source": "Bad1", "target": "Alice", "type": "TARGETS", "fact": "Bad1 targets Alice"},
+        ]
+        storage._ner.extract.return_value = {
+            "entities": entities,
+            "relations": relations,
+        }
+        storage._embedding.get_embeddings.side_effect = [
+            [[0.1] * 1536] * len(entities),
+            [[0.1] * 1536] * len(relations),
+        ]
+
+        mock_session = MagicMock()
+        storage._driver.session.return_value.__enter__.return_value = mock_session
+
+        mock_tx = MagicMock()
+        record_mock = MagicMock()
+        record_mock.__getitem__.side_effect = lambda k: "mock-uuid"
+        mock_tx.run.return_value.single.return_value = record_mock
+        mock_session.execute_write.side_effect = lambda tx_fn: tx_fn(mock_tx)
+        storage._call_with_retry = lambda func, *args, **kwargs: func(*args, **kwargs)
+
+        with patch("app.storage.neo4j_storage.logger.warning") as mock_warn:
+            episode_id = storage.add_text("test_graph", "Batch ingestion text.")
+
+        assert episode_id is not None
+
+        executed_queries = [call[0][0] for call in mock_tx.run.call_args_list]
+
+        # Exactly 3 valid labels should be applied
+        set_label_queries = [q for q in executed_queries if "SET n:`" in q]
+        assert len(set_label_queries) == 3
+        assert any("SET n:`Person`" in q for q in set_label_queries)
+        assert any("SET n:`1st_Company`" in q for q in set_label_queries)
+        assert any("SET n:`_System_Node`" in q for q in set_label_queries)
+
+        # Invalid labels must not appear in any query
+        for bad_payload in ["Person` ON MATCH", "Bad\x00Type", "Рerson"]:
+            for q in executed_queries:
+                assert bad_payload not in q
+
+        # Warnings should be logged for each invalid label
+        warn_messages = [str(call[0][0]) for call in mock_warn.call_args_list]
+        assert any("Skipping invalid entity label" in msg and "Person`" in msg for msg in warn_messages)
+        assert any("Skipping invalid entity label" in msg and "Bad\x00Type" in msg for msg in warn_messages)
+        assert any("Skipping invalid entity label" in msg and "Рerson" in msg for msg in warn_messages)
+
 
 # ====================================================================
 # 4. NERExtractor._validate_and_clean Tests
@@ -266,6 +368,12 @@ class TestNERExtractorValidateAndClean:
         "Person\nDETACH DELETE",
         "Person Name",
         "",
+        "Person\x00",
+        "\x00",
+        "Рerson",
+        "Person\u200b",
+        "Person\ufeff",
+        "A" * 1000 + "\x00",
     ])
     def test_various_invalid_types_fallback_to_entity(self, bad_type):
         extractor = NERExtractor.__new__(NERExtractor)
@@ -275,6 +383,28 @@ class TestNERExtractorValidateAndClean:
         }
         cleaned = extractor._validate_and_clean(raw_result, {})
         assert cleaned["entities"][0]["type"] == "Entity"
+
+    def test_batch_mixed_valid_and_invalid_types(self):
+        extractor = NERExtractor.__new__(NERExtractor)
+        raw_result = {
+            "entities": [
+                {"name": "E1", "type": "Person", "attributes": {}},
+                {"name": "E2", "type": "Bad`Type", "attributes": {}},
+                {"name": "E3", "type": "1st_Category", "attributes": {}},
+                {"name": "E4", "type": "Null\x00Byte", "attributes": {}},
+                {"name": "E5", "type": "_Internal", "attributes": {}},
+                {"name": "E6", "type": "Рerson", "attributes": {}},
+            ],
+            "relations": []
+        }
+        cleaned = extractor._validate_and_clean(raw_result, {})
+        types = {e["name"]: e["type"] for e in cleaned["entities"]}
+        assert types["E1"] == "Person"
+        assert types["E2"] == "Entity"
+        assert types["E3"] == "1st_Category"
+        assert types["E4"] == "Entity"
+        assert types["E5"] == "_Internal"
+        assert types["E6"] == "Entity"
 
 
 # ====================================================================
