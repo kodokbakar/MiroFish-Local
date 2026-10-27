@@ -40,7 +40,7 @@ Only the orchestrator edits this file.
 | 021 | `f0e936a` | Ontology generator truncates long texts to first chunk, missing critical context | bugfix | adapt | medium | ported | `kodokbakar/port-021` | Ported via branch kodokbakar/port-021; 225 tests passed (10 new). |
 | 022 | `3f4d561` | Unconstrained Python versions lead to build failures on Python 3.13+ | bugfix | adapt | medium | ported | `kodokbakar/port-022` | Ported via branch kodokbakar/port-022; 225 tests passed (10 new). Constrains requires-python to '>=3.11,<3.13' in pyproject.toml and uv.lock. |
 | 023 | `05bea4a` | Step 2 environment setup polling continues after background preparation failure | bugfix | adapt | medium | ported | `kodokbakar/port-023` | Ported via branch kodokbakar/port-023; 225 tests passed. |
-| 024 | `daec4b6` | Missing type hints in config/logger and missing FileParser.is_supported() helper | refactor | direct | low | pending | | Adds return/arg type hints and FileParser.is_supported() helper |
+| 024 | `daec4b6` | Missing type hints in config/logger and missing FileParser.is_supported() helper | refactor | direct | low | ported | `kodokbakar/port-024` | Ported via branch kodokbakar/port-024; 251 tests passed (36 new). |
 | 025 | `9f80ad6` | Field normalization scattered across profile generation rather than centralized | refactor | direct | low | pending | | Centralizes profile field normalization in dataclass constructor |
 | 026 | `9506e6f` | Ontology attribute normalization duplicated across graph builder and generator | refactor | adapt | low | pending | | Centralizes ontology attribute normalization in utility module |
 
