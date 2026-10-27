@@ -465,6 +465,131 @@ class TestNeo4jStorageIngestion(unittest.TestCase):
         self.assertEqual(rel["episode_ids"], ["ep-new"])
         self.assertEqual(rel["fact"], "They collaborate closely")
 
+    def test_merge_entity_nested_and_complex_attributes(self):
+        """Verify merging preserves complex types (nested dicts, lists) across chunks."""
+        # Chunk 1: complex nested attributes
+        self.mock_ner.extract.return_value = {
+            "entities": [{
+                "name": "Alice",
+                "type": "Person",
+                "attributes": {
+                    "skills": ["python", "neo4j"],
+                    "meta": {"level": "Senior", "tags": ["lead"]},
+                },
+            }],
+            "relations": [],
+        }
+        self.storage.add_text("test-graph", "Alice is skilled in Python and Neo4j.")
+
+        # Chunk 2: new contact field and updated skills
+        self.mock_ner.extract.return_value = {
+            "entities": [{
+                "name": "Alice",
+                "type": "Person",
+                "attributes": {
+                    "skills": ["python", "neo4j", "ai"],
+                    "contact": {"email": "alice@example.com"},
+                },
+            }],
+            "relations": [],
+        }
+        self.storage.add_text("test-graph", "Contact Alice at alice@example.com.")
+
+        key = ("test-graph", "alice")
+        attrs = json.loads(self.fake_driver.entities[key]["attributes_json"])
+        self.assertEqual(attrs["meta"], {"level": "Senior", "tags": ["lead"]})
+        self.assertEqual(attrs["contact"], {"email": "alice@example.com"})
+        self.assertEqual(attrs["skills"], ["python", "neo4j", "ai"])
+
+    def test_merge_entity_handles_non_dict_new_attributes(self):
+        """Verify _merge_entity safely preserves existing attributes when new attrs is non-dict."""
+        self.mock_ner.extract.return_value = {
+            "entities": [{"name": "Bob", "type": "Person", "attributes": {"role": "Designer"}}],
+            "relations": [],
+        }
+        self.storage.add_text("test-graph", "Bob is a designer.")
+
+        # Chunk 2: attributes is None or invalid type
+        self.mock_ner.extract.return_value = {
+            "entities": [{"name": "Bob", "type": "Person", "attributes": None}],
+            "relations": [],
+        }
+        self.storage.add_text("test-graph", "Bob attended standup.")
+
+        key = ("test-graph", "bob")
+        attrs = json.loads(self.fake_driver.entities[key]["attributes_json"])
+        self.assertEqual(attrs, {"role": "Designer"})
+
+    def test_relation_directionality_not_conflated(self):
+        """Verify A -> B and B -> A with identical relation name are distinct relationships."""
+        self.mock_ner.extract.return_value = {
+            "entities": [
+                {"name": "Alice", "type": "Person", "attributes": {}},
+                {"name": "Bob", "type": "Person", "attributes": {}},
+            ],
+            "relations": [
+                {"source": "Alice", "target": "Bob", "type": "ADVISES", "fact": "Alice advises Bob"},
+                {"source": "Bob", "target": "Alice", "type": "ADVISES", "fact": "Bob advises Alice on design"},
+            ],
+        }
+        ep1 = self.storage.add_text("test-graph", "Alice advises Bob. Bob advises Alice on design.")
+
+        alice_uuid = self.fake_driver.entities[("test-graph", "alice")]["uuid"]
+        bob_uuid = self.fake_driver.entities[("test-graph", "bob")]["uuid"]
+
+        rel_ab_key = (alice_uuid, bob_uuid, "test-graph", "ADVISES")
+        rel_ba_key = (bob_uuid, alice_uuid, "test-graph", "ADVISES")
+
+        self.assertIn(rel_ab_key, self.fake_driver.relations)
+        self.assertIn(rel_ba_key, self.fake_driver.relations)
+        self.assertNotEqual(
+            self.fake_driver.relations[rel_ab_key]["uuid"],
+            self.fake_driver.relations[rel_ba_key]["uuid"],
+        )
+        self.assertEqual(self.fake_driver.relations[rel_ab_key]["fact"], "Alice advises Bob")
+        self.assertEqual(self.fake_driver.relations[rel_ba_key]["fact"], "Bob advises Alice on design")
+
+        # Chunk 2: Repeat only Alice -> Bob; Bob -> Alice should not get new episode_id
+        self.mock_ner.extract.return_value = {
+            "entities": [
+                {"name": "Alice", "type": "Person", "attributes": {}},
+                {"name": "Bob", "type": "Person", "attributes": {}},
+            ],
+            "relations": [
+                {"source": "Alice", "target": "Bob", "type": "ADVISES", "fact": "Alice continues to advise Bob"},
+            ],
+        }
+        ep2 = self.storage.add_text("test-graph", "Alice still advises Bob.")
+
+        self.assertEqual(self.fake_driver.relations[rel_ab_key]["episode_ids"], [ep1, ep2])
+        self.assertEqual(self.fake_driver.relations[rel_ba_key]["episode_ids"], [ep1])
+
+    def test_relation_different_entity_pairs_same_type_not_conflated(self):
+        """Verify same relation name across different entity pairs creates distinct edges."""
+        self.mock_ner.extract.return_value = {
+            "entities": [
+                {"name": "Alice", "type": "Person", "attributes": {}},
+                {"name": "Bob", "type": "Person", "attributes": {}},
+                {"name": "CompanyX", "type": "Company", "attributes": {}},
+                {"name": "CompanyY", "type": "Company", "attributes": {}},
+            ],
+            "relations": [
+                {"source": "Alice", "target": "CompanyX", "type": "WORKS_AT", "fact": "Alice works at CompanyX"},
+                {"source": "Bob", "target": "CompanyX", "type": "WORKS_AT", "fact": "Bob works at CompanyX"},
+                {"source": "Alice", "target": "CompanyY", "type": "WORKS_AT", "fact": "Alice consults at CompanyY"},
+            ],
+        }
+        ep = self.storage.add_text("test-graph", "Alice and Bob at CompanyX, Alice consults CompanyY.")
+
+        alice_uuid = self.fake_driver.entities[("test-graph", "alice")]["uuid"]
+        bob_uuid = self.fake_driver.entities[("test-graph", "bob")]["uuid"]
+        x_uuid = self.fake_driver.entities[("test-graph", "companyx")]["uuid"]
+        y_uuid = self.fake_driver.entities[("test-graph", "companyy")]["uuid"]
+
+        self.assertIn((alice_uuid, x_uuid, "test-graph", "WORKS_AT"), self.fake_driver.relations)
+        self.assertIn((bob_uuid, x_uuid, "test-graph", "WORKS_AT"), self.fake_driver.relations)
+        self.assertIn((alice_uuid, y_uuid, "test-graph", "WORKS_AT"), self.fake_driver.relations)
+        self.assertEqual(len(self.fake_driver.relations), 3)
 
 if __name__ == "__main__":
     unittest.main()
