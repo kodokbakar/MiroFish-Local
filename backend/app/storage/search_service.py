@@ -11,15 +11,35 @@ from typing import List, Dict, Any, Optional
 from neo4j import Session as Neo4jSession
 
 from .embedding_service import EmbeddingService
+from .neo4j_records import edge_to_dict, node_to_dict
 
 logger = logging.getLogger('mirofish.search')
+
+
+def _edge_result(record: Dict[str, Any]) -> Dict[str, Any]:
+    properties = dict(record["r"])
+    properties.pop("fact_embedding", None)
+    properties.pop("attributes_json", None)
+    return {
+        **properties,
+        **edge_to_dict(record["r"], record["src_uuid"], record["tgt_uuid"]),
+        "_score": record["score"],
+    }
+
+
+def _node_result(record: Dict[str, Any]) -> Dict[str, Any]:
+    properties = dict(record["n"])
+    for field in ("embedding", "name_lower", "attributes_json"):
+        properties.pop(field, None)
+    return {**properties, **node_to_dict(record["n"], record["labels"]), "_score": record["score"]}
 
 # Cypher for vector search on edges (facts)
 _VECTOR_SEARCH_EDGES = """
 CALL db.index.vector.queryRelationships('fact_embedding', $limit, $query_vector)
 YIELD relationship, score
 WHERE relationship.graph_id = $graph_id
-RETURN relationship AS r, score
+RETURN relationship AS r, startNode(relationship).uuid AS src_uuid,
+       endNode(relationship).uuid AS tgt_uuid, score
 ORDER BY score DESC
 LIMIT $limit
 """
@@ -29,7 +49,7 @@ _VECTOR_SEARCH_NODES = """
 CALL db.index.vector.queryNodes('entity_embedding', $limit, $query_vector)
 YIELD node, score
 WHERE node.graph_id = $graph_id
-RETURN node AS n, score
+RETURN node AS n, labels(node) AS labels, score
 ORDER BY score DESC
 LIMIT $limit
 """
@@ -39,7 +59,8 @@ _FULLTEXT_SEARCH_EDGES = """
 CALL db.index.fulltext.queryRelationships('fact_fulltext', $query_text)
 YIELD relationship, score
 WHERE relationship.graph_id = $graph_id
-RETURN relationship AS r, score
+RETURN relationship AS r, startNode(relationship).uuid AS src_uuid,
+       endNode(relationship).uuid AS tgt_uuid, score
 ORDER BY score DESC
 LIMIT $limit
 """
@@ -49,7 +70,7 @@ _FULLTEXT_SEARCH_NODES = """
 CALL db.index.fulltext.queryNodes('entity_fulltext', $query_text)
 YIELD node, score
 WHERE node.graph_id = $graph_id
-RETURN node AS n, score
+RETURN node AS n, labels(node) AS labels, score
 ORDER BY score DESC
 LIMIT $limit
 """
@@ -133,7 +154,7 @@ class SearchService:
                 limit=limit,
             )
             return [
-                {**dict(record["r"]), "uuid": record["r"]["uuid"], "_score": record["score"]}
+                _edge_result(record)
                 for record in result
             ]
         except Exception as e:
@@ -154,7 +175,7 @@ class SearchService:
                 limit=limit,
             )
             return [
-                {**dict(record["r"]), "uuid": record["r"]["uuid"], "_score": record["score"]}
+                _edge_result(record)
                 for record in result
             ]
         except Exception as e:
@@ -173,7 +194,7 @@ class SearchService:
                 limit=limit,
             )
             return [
-                {**dict(record["n"]), "uuid": record["n"]["uuid"], "_score": record["score"]}
+                _node_result(record)
                 for record in result
             ]
         except Exception as e:
@@ -193,7 +214,7 @@ class SearchService:
                 limit=limit,
             )
             return [
-                {**dict(record["n"]), "uuid": record["n"]["uuid"], "_score": record["score"]}
+                _node_result(record)
                 for record in result
             ]
         except Exception as e:
