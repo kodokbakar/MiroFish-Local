@@ -41,7 +41,7 @@ Only the orchestrator edits this file.
 | 022 | `3f4d561` | Unconstrained Python versions lead to build failures on Python 3.13+ | bugfix | adapt | medium | pending | | Constrains requires-python to '>=3.11,<3.13' in pyproject.toml |
 | 023 | `05bea4a` | Step 2 environment setup polling continues after background preparation failure | bugfix | adapt | medium | pending | | Propagates preparation failure to task manager and stops Step 2 polling |
 | 024 | `daec4b6` | Missing type hints in config/logger and missing FileParser.is_supported() helper | refactor | direct | low | pending | | Adds return/arg type hints and FileParser.is_supported() helper |
-| 025 | `9f80ad6` | Field normalization scattered across profile generation rather than centralized | refactor | direct | low | pending | | Centralizes profile field normalization in dataclass constructor |
+| 025 | `9f80ad6` | Field normalization scattered across profile generation rather than centralized | refactor | direct | low | ported | `kodokbakar/port-025` | Ported via branch kodokbakar/port-025; 225 tests passed (9 new). |
 | 026 | `9506e6f` | Ontology attribute normalization duplicated across graph builder and generator | refactor | adapt | low | pending | | Centralizes ontology attribute normalization in utility module |
 
 ## Skipped (with reason)
