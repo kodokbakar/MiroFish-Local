@@ -60,6 +60,7 @@ class SimulationState:
     entity_types: List[str] = field(default_factory=list)
     
     # Config generation information
+    profiles_generated: bool = False
     config_generated: bool = False
     config_reasoning: str = ""
     
@@ -87,6 +88,7 @@ class SimulationState:
             "entities_count": self.entities_count,
             "profiles_count": self.profiles_count,
             "entity_types": self.entity_types,
+            "profiles_generated": self.profiles_generated,
             "config_generated": self.config_generated,
             "config_reasoning": self.config_reasoning,
             "current_round": self.current_round,
@@ -116,6 +118,7 @@ class SimulationState:
             "entities_count": self.entities_count,
             "profiles_count": self.profiles_count,
             "entity_types": self.entity_types,
+            "profiles_generated": self.profiles_generated,
             "config_generated": self.config_generated,
             "error": self.error,
         }
@@ -187,6 +190,7 @@ class SimulationManager:
             entities_count=data.get("entities_count", 0),
             profiles_count=data.get("profiles_count", 0),
             entity_types=data.get("entity_types", []),
+            profiles_generated=data.get("profiles_generated", False),
             config_generated=data.get("config_generated", False),
             config_reasoning=data.get("config_reasoning", ""),
             current_round=data.get("current_round", 0),
@@ -275,6 +279,10 @@ class SimulationManager:
         
         try:
             state.status = SimulationStatus.PREPARING
+            state.error = None
+            state.profiles_generated = False
+            state.config_generated = False
+            state.config_reasoning = ""
             self._save_simulation_state(state)
             
             sim_dir = self._get_simulation_dir(simulation_id)
@@ -309,9 +317,9 @@ class SimulationManager:
             
             if filtered.filtered_count == 0:
                 state.status = SimulationStatus.FAILED
-                state.error = "No entities matching criteria found, check if graph is correctly constructed"
+                state.error = "No matching entities found, please check if the graph is properly constructed"
                 self._save_simulation_state(state)
-                return state
+                raise ValueError(state.error)
             
             # ========== Phase 2: Generate Agent Profile ==========
             total_entities = len(filtered.entities)
@@ -359,6 +367,8 @@ class SimulationManager:
             )
             
             state.profiles_count = len(profiles)
+            state.profiles_generated = len(profiles) > 0
+            self._save_simulation_state(state)
             
             # Save Profile files (Note: Twitter uses CSV format, Reddit uses JSON format)
             # Reddit has been saved in real-time during generation, save once more here to ensure completeness

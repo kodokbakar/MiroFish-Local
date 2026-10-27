@@ -737,6 +737,14 @@ const addLog = (msg) => {
   emit('add-log', msg)
 }
 
+const handlePrepareFailure = (message) => {
+  stopPolling()
+  stopProfilesPolling()
+  stopConfigPolling()
+  addLog(`Preparation failed: ${message || 'Unknown error'}`)
+  emit('update-status', 'error')
+}
+
 // ProcessStart simulationButton click
 const handleStartSimulation = () => {
   // Build parameters to pass to parent component
@@ -895,9 +903,7 @@ const pollPrepareStatus = async () => {
         stopProfilesPolling()
         await loadPreparedData()
       } else if (data.status === 'failed') {
-        addLog(`✗ Preparation failed: ${data.error || 'Unknown error'}`)
-        stopPolling()
-        stopProfilesPolling()
+        handlePrepareFailure(data.error)
       }
     }
   } catch (err) {
@@ -970,6 +976,11 @@ const fetchConfigRealtime = async () => {
     if (res.success && res.data) {
       const data = res.data
       
+      if (data.status === 'failed' || data.error) {
+        handlePrepareFailure(data.error)
+        return
+      }
+      
       // Output configuration generation phase log（Avoid duplication）
       if (data.generation_stage && data.generation_stage !== lastLoggedConfigStage) {
         lastLoggedConfigStage = data.generation_stage
@@ -1029,29 +1040,37 @@ const loadPreparedData = async () => {
   try {
     const res = await getSimulationConfigRealtime(props.simulationId)
     if (res.success && res.data) {
-      if (res.data.config_generated && res.data.config) {
-        simulationConfig.value = res.data.config
+      const configState = res.data
+
+      if (configState.status === 'failed' || configState.error) {
+        handlePrepareFailure(configState.error)
+        return
+      }
+
+      if (configState.config_generated && configState.config) {
+        simulationConfig.value = configState.config
         addLog('✓ Simulation configuration loaded successfully')
         
         // Show detailed configuration summary
-        if (res.data.summary) {
-          addLog(`  ├─ AgentQuantity: ${res.data.summary.total_agents}Number`)
-          addLog(`  ├─ Simulation Duration: ${res.data.summary.simulation_hours}hours`)
-          addLog(`  └─ Initial posts: ${res.data.summary.initial_posts_count}items`)
+        if (configState.summary) {
+          addLog(`  ├─ AgentQuantity: ${configState.summary.total_agents}Number`)
+          addLog(`  ├─ Simulation Duration: ${configState.summary.simulation_hours}hours`)
+          addLog(`  └─ Initial posts: ${configState.summary.initial_posts_count}items`)
         }
         
         addLog('✓ Env Setup Completed，Can start simulation')
         phase.value = 4
         emit('update-status', 'completed')
-      } else {
+      } else if (configState.is_generating) {
         // Configuration not yet generated，Start polling
         addLog('Configuration generating，Start polling wait...')
         startConfigPolling()
+      } else {
+        handlePrepareFailure('Simulation config is missing and the backend is no longer generating it')
       }
     }
   } catch (err) {
-    addLog(`Failed to load configuration: ${err.message}`)
-    emit('update-status', 'error')
+    handlePrepareFailure(`Failed to load configuration: ${err.message}`)
   }
 }
 
