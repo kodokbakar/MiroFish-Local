@@ -32,15 +32,20 @@ def _coerce_to_str(value: Any) -> str:
     Handles dict, list, and other non-string types that may be returned
     by LLM JSON parsing.
     """
+    if value is None:
+        return ""
     if isinstance(value, str):
         return value
     if isinstance(value, dict):
         for key in ('text', 'value', 'description', 'content', 'summary', 'name'):
-            if key in value and isinstance(value[key], str):
-                return value[key]
+            if key in value:
+                candidate = _coerce_to_str(value[key])
+                if candidate:
+                    return candidate
         return json.dumps(value, ensure_ascii=False)
-    if isinstance(value, list):
+    if isinstance(value, (list, tuple)):
         str_items = [_coerce_to_str(item) for item in value]
+        str_items = [item for item in str_items if item]
         return ', '.join(str_items)
     return str(value)
 
@@ -50,21 +55,20 @@ def _coerce_to_str_list(value: Any) -> List[str]:
 
     Handles nested structures that may be returned by LLM JSON parsing.
     """
-    if isinstance(value, list):
-        result = []
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        result: List[str] = []
         for item in value:
-            if isinstance(item, str):
-                result.append(item)
-            elif isinstance(item, dict):
-                result.append(_coerce_to_str(item))
+            if isinstance(item, (list, tuple)):
+                result.extend(_coerce_to_str_list(item))
             else:
-                result.append(str(item))
+                text = _coerce_to_str(item)
+                if text:
+                    result.append(text)
         return result
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, dict):
-        return [_coerce_to_str(value)]
-    return []
+    text = _coerce_to_str(value)
+    return [text] if text else []
 
 
 @dataclass
@@ -99,13 +103,15 @@ class OasisAgentProfile:
     
     created_at: str = field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d"))
     def __post_init__(self):
-        """Normalize field types to guard against structured LLM outputs
-        (e.g. dict/list instead of plain strings)."""
-        self.bio = _coerce_to_str(self.bio)
-        self.persona = _coerce_to_str(self.persona)
-        self.country = _coerce_to_str(self.country) if self.country is not None else None
-        self.profession = _coerce_to_str(self.profession) if self.profession is not None else None
-        self.gender = _coerce_to_str(self.gender) if self.gender is not None else None
+        """Normalize structured LLM fields once at the profile boundary."""
+        self.bio = _coerce_to_str(self.bio) or self.name
+        self.persona = _coerce_to_str(self.persona) or (
+            f"{self.name} is a participant in social discussions."
+        )
+        self.country = _coerce_to_str(self.country) or None
+        self.profession = _coerce_to_str(self.profession) or None
+        self.gender = _coerce_to_str(self.gender) or None
+        self.mbti = _coerce_to_str(self.mbti) or None
         self.interested_topics = _coerce_to_str_list(self.interested_topics)
     
     
@@ -547,14 +553,6 @@ class OasisProfileGenerator:
                 try:
                     result = json.loads(content)
 
-                    # Normalize types from LLM output
-                    for str_field in ('bio', 'persona', 'country', 'profession'):
-                        if str_field in result and result[str_field] is not None:
-                            result[str_field] = _coerce_to_str(result[str_field])
-                    if 'interested_topics' in result:
-                        result['interested_topics'] = _coerce_to_str_list(
-                            result['interested_topics']
-                        )
 
                     # Validate required fields
                     if "bio" not in result or not result["bio"]:
@@ -1099,19 +1097,15 @@ Important:
 
             # Write data rows
             for idx, profile in enumerate(profiles):
-                # Defensive coercion in case __post_init__ was bypassed
-                bio = _coerce_to_str(profile.bio) if profile.bio else profile.name
-                persona = _coerce_to_str(profile.persona) if profile.persona else ''
-
                 # user_char: Complete persona (bio + persona) for LLM system prompt
-                user_char = bio
-                if persona and persona != bio:
-                    user_char = f"{bio} {persona}"
+                user_char = profile.bio
+                if profile.persona and profile.persona != profile.bio:
+                    user_char = f"{profile.bio} {profile.persona}"
                 # Handle newlines (replace with space in CSV)
                 user_char = user_char.replace('\n', ' ').replace('\r', ' ')
 
                 # description: Short bio for external display
-                description = bio.replace('\n', ' ').replace('\r', ' ')
+                description = profile.bio.replace('\n', ' ').replace('\r', ' ')
 
                 row = [
                     idx,                    # user_id: Sequential ID starting from 0
@@ -1164,40 +1158,27 @@ Important:
         """
         data = []
         for idx, profile in enumerate(profiles):
-            # Defensive coercion in case __post_init__ was bypassed
-            bio = _coerce_to_str(profile.bio) if profile.bio else f"{profile.name}"
-            persona = _coerce_to_str(profile.persona) if profile.persona else (
-                f"{profile.name} is a participant in social discussions."
-            )
-            country = _coerce_to_str(profile.country) if profile.country else "US"
-            profession = _coerce_to_str(profile.profession) if profile.profession else None
-            interested_topics = (
-                _coerce_to_str_list(profile.interested_topics)
-                if profile.interested_topics
-                else None
-            )
-
             # Use format consistent with to_reddit_format()
             item = {
                 "user_id": profile.user_id if profile.user_id is not None else idx,  # Key: must include user_id
                 "username": profile.user_name,
                 "name": profile.name,
-                "bio": bio[:150],
-                "persona": persona,
+                "bio": profile.bio[:150],
+                "persona": profile.persona,
                 "karma": profile.karma if profile.karma else 1000,
                 "created_at": profile.created_at,
                 # OASIS required fields - ensure all have defaults
                 "age": profile.age if profile.age else 30,
                 "gender": self._normalize_gender(profile.gender),
                 "mbti": profile.mbti if profile.mbti else "ISTJ",
-                "country": country,
+                "country": profile.country if profile.country else "US",
             }
 
             # Optional fields
-            if profession:
-                item["profession"] = profession
-            if interested_topics:
-                item["interested_topics"] = interested_topics
+            if profile.profession:
+                item["profession"] = profile.profession
+            if profile.interested_topics:
+                item["interested_topics"] = profile.interested_topics
             data.append(item)
 
         with open(file_path, 'w', encoding='utf-8') as f:
