@@ -47,6 +47,7 @@ Only the orchestrator edits this file.
 | 028 | - | Issue #7: State-machine deadlock prevents single-platform simulation restart and status check | bugfix | direct | low | ported | `b51b464` | Fixed and tested on branch kodokbakar/state-machine-deadlock-prevents-single-platform; 506 tests passed. |
 | 029 | - | Issue #8: Race condition between stop_simulation/start_simulation and monitor thread corrupts state and orphans processes | bugfix | direct | medium | ported | `2617d67` | Fixed and tested on branch kodokbakar/race-condition-between-stop_simulation-start_sim; 474 tests passed. |
 | 030 | - | Issue #9: unhandled KeyError and AttributeError crash in ReACT loop and chat endpoint during tool call parsing | bugfix | direct | low | ported | `0f806e8` | Fixed and tested on branch kodokbakar/fix-report_agent-unhandled-keyerror-and-attribut; 499 tests passed. |
+| 031 | - | Issue #10: Unhandled TypeError and AttributeError on malformed source_targets and entity_types in ontology validation | bugfix | direct | low | ported | `59cae4c` | Fixed and tested on branch kodokbakar/unhandled-typeerror-and-attributeerror-on-malfor; 476 tests passed. |
 
 ## Skipped (with reason)
 | Upstream commit | Reason |
