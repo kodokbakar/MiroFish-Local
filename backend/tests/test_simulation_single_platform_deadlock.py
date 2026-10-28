@@ -301,6 +301,90 @@ class TestCheckSimulationPrepared:
         assert is_prepared is True
         assert info["profiles_count"] == 9
 
+    def test_corrupted_state_json_returns_error(self, test_sim_dir):
+        """Corrupted state.json returns error reason."""
+        sim_id = "sim_corrupted_state"
+        sim_dir = os.path.join(test_sim_dir, sim_id)
+        os.makedirs(sim_dir, exist_ok=True)
+        with open(os.path.join(sim_dir, "state.json"), "w", encoding="utf-8") as f:
+            f.write("{invalid json content")
+
+        is_prepared, info = _check_simulation_prepared(sim_id)
+        assert is_prepared is False
+        assert "Failed to read state file" in info["reason"]
+
+    def test_zero_byte_empty_twitter_profiles_csv_falls_back_to_state_count(self, test_sim_dir):
+        """Completely empty (0-byte) twitter_profiles.csv falls back to state_data profiles_count."""
+        sim_id = _create_sim(
+            test_sim_dir,
+            "sim_zero_byte_tw",
+            enable_twitter=True,
+            enable_reddit=False,
+            twitter_profiles_count=0,
+            state_profiles_count=7,
+        )
+        csv_path = os.path.join(test_sim_dir, sim_id, "twitter_profiles.csv")
+        with open(csv_path, "w", encoding="utf-8") as f:
+            f.write("")
+
+        is_prepared, info = _check_simulation_prepared(sim_id)
+        assert is_prepared is True
+        assert info["profiles_count"] == 7
+
+    def test_corrupted_twitter_profiles_csv_falls_back_gracefully(self, test_sim_dir):
+        """Corrupted twitter_profiles.csv with invalid byte sequence falls back to state_data profiles_count."""
+        sim_id = _create_sim(
+            test_sim_dir,
+            "sim_corrupted_tw_csv",
+            enable_twitter=True,
+            enable_reddit=False,
+            twitter_profiles_count=0,
+            state_profiles_count=11,
+        )
+        csv_path = os.path.join(test_sim_dir, sim_id, "twitter_profiles.csv")
+        with open(csv_path, "wb") as f:
+            f.write(b"\xff\xfe\x80\x80")
+
+        is_prepared, info = _check_simulation_prepared(sim_id)
+        assert is_prepared is True
+        assert info["profiles_count"] == 11
+
+    def test_corrupted_reddit_profiles_json_falls_back_gracefully(self, test_sim_dir):
+        """Corrupted reddit_profiles.json falls back to state_data profiles_count."""
+        sim_id = _create_sim(
+            test_sim_dir,
+            "sim_corrupted_rd_json",
+            enable_twitter=False,
+            enable_reddit=True,
+            reddit_profiles_count=0,
+            state_profiles_count=14,
+        )
+        json_path = os.path.join(test_sim_dir, sim_id, "reddit_profiles.json")
+        with open(json_path, "w", encoding="utf-8") as f:
+            f.write("{corrupted json[")
+
+        is_prepared, info = _check_simulation_prepared(sim_id)
+        assert is_prepared is True
+        assert info["profiles_count"] == 14
+
+    def test_both_platforms_disabled_requires_only_base_files(self, test_sim_dir):
+        """When both platforms are disabled, neither profile file is required."""
+        sim_id = _create_sim(
+            test_sim_dir,
+            "sim_both_disabled",
+            enable_twitter=False,
+            enable_reddit=False,
+            twitter_profiles_count=0,
+            reddit_profiles_count=0,
+        )
+
+        is_prepared, info = _check_simulation_prepared(sim_id)
+        assert is_prepared is True
+        assert "reddit_profiles.json" not in info["existing_files"]
+        assert "twitter_profiles.csv" not in info["existing_files"]
+        assert "state.json" in info["existing_files"]
+        assert "simulation_config.json" in info["existing_files"]
+
 
 # ============================================================================
 # 2. Restart single-platform simulation from paused, stopped, completed
@@ -309,7 +393,7 @@ class TestCheckSimulationPrepared:
 class TestSinglePlatformSimulationRestart:
     """Tests for restarting single-platform simulations via POST /api/simulation/start."""
 
-    @pytest.mark.parametrize("initial_status", ["paused", "stopped", "completed"])
+    @pytest.mark.parametrize("initial_status", ["paused", "stopped", "completed", "failed"])
     def test_restart_twitter_only_from_inactive_states(self, app_client, test_sim_dir, initial_status):
         """Twitter-only simulation in paused/stopped/completed state successfully restarts."""
         sim_id = _create_sim(
@@ -349,7 +433,7 @@ class TestSinglePlatformSimulationRestart:
         state = manager.get_simulation(sim_id)
         assert state.status == SimulationStatus.RUNNING
 
-    @pytest.mark.parametrize("initial_status", ["paused", "stopped", "completed"])
+    @pytest.mark.parametrize("initial_status", ["paused", "stopped", "completed", "failed"])
     def test_restart_reddit_only_from_inactive_states(self, app_client, test_sim_dir, initial_status):
         """Reddit-only simulation in paused/stopped/completed state successfully restarts."""
         sim_id = _create_sim(
@@ -404,6 +488,94 @@ class TestSinglePlatformSimulationRestart:
             assert resp.status_code == 400
             assert resp.json["success"] is False
             assert "Please call /prepare first" in resp.json["error"]
+
+    def test_restart_with_force_true_on_paused_simulation(self, app_client, test_sim_dir):
+        """Force restart on paused single-platform simulation cleans logs and resets status."""
+        sim_id = _create_sim(
+            test_sim_dir,
+            "sim_force_paused_tw",
+            enable_twitter=True,
+            enable_reddit=False,
+            status="paused",
+            twitter_profiles_count=3,
+        )
+
+        dummy_run_state = SimulationRunState(
+            simulation_id=sim_id,
+            runner_status=RunnerStatus.RUNNING,
+            process_pid=9998,
+            twitter_running=True,
+            reddit_running=False,
+            started_at="2026-01-01T00:00:00",
+        )
+
+        with patch.object(SimulationRunner, "is_process_alive", return_value=False), \
+             patch.object(SimulationRunner, "get_run_state", return_value=None), \
+             patch.object(SimulationRunner, "cleanup_simulation_logs", return_value={"success": True}) as mock_cleanup, \
+             patch.object(SimulationRunner, "start_simulation", return_value=dummy_run_state):
+
+            resp = app_client.post("/api/simulation/start", json={"simulation_id": sim_id, "force": True})
+            assert resp.status_code == 200
+            assert resp.json["success"] is True
+            assert resp.json["data"]["force_restarted"] is True
+            mock_cleanup.assert_called_once_with(sim_id)
+
+        manager = SimulationManager()
+        state = manager.get_simulation(sim_id)
+        assert state.status == SimulationStatus.RUNNING
+
+    def test_force_restart_when_process_is_alive(self, app_client, test_sim_dir):
+        """Restarting while process is alive requires force=True to stop running process."""
+        sim_id = _create_sim(
+            test_sim_dir,
+            "sim_alive_tw",
+            enable_twitter=True,
+            enable_reddit=False,
+            status="running",
+            twitter_profiles_count=3,
+        )
+
+        alive_run_state = SimulationRunState(
+            simulation_id=sim_id,
+            runner_status=RunnerStatus.RUNNING,
+            process_pid=8888,
+            twitter_running=True,
+            reddit_running=False,
+            started_at="2026-01-01T00:00:00",
+        )
+
+        # Without force -> 400 error
+        with patch.object(SimulationRunner, "is_process_alive", return_value=True), \
+             patch.object(SimulationRunner, "get_run_state", return_value=alive_run_state):
+
+            resp = app_client.post("/api/simulation/start", json={"simulation_id": sim_id, "force": False})
+            assert resp.status_code == 400
+            assert "Simulation is running" in resp.json["error"]
+
+        new_run_state = SimulationRunState(
+            simulation_id=sim_id,
+            runner_status=RunnerStatus.RUNNING,
+            process_pid=8889,
+            twitter_running=True,
+            reddit_running=False,
+            started_at="2026-01-01T00:05:00",
+        )
+
+        # With force=True -> stops simulation, cleans logs, resets status, restarts
+        with patch.object(SimulationRunner, "is_process_alive", return_value=True), \
+             patch.object(SimulationRunner, "get_run_state", return_value=alive_run_state), \
+             patch.object(SimulationRunner, "stop_simulation") as mock_stop, \
+             patch.object(SimulationRunner, "cleanup_simulation_logs", return_value={"success": True}) as mock_cleanup, \
+             patch.object(SimulationRunner, "start_simulation", return_value=new_run_state) as mock_start:
+
+            resp = app_client.post("/api/simulation/start", json={"simulation_id": sim_id, "force": True})
+            assert resp.status_code == 200
+            assert resp.json["success"] is True
+            assert resp.json["data"]["force_restarted"] is True
+            mock_stop.assert_called_once_with(sim_id)
+            mock_cleanup.assert_called_once_with(sim_id)
+            assert mock_start.call_args[1]["platform"] == "twitter"
+
 
 
 # ============================================================================
@@ -490,6 +662,25 @@ class TestPrepareEndpointsSinglePlatform:
             assert data["status"] == "ready"
 
             mock_prep.assert_not_called()
+
+    def test_prepare_status_unprepared_single_platform_returns_not_started(self, app_client, test_sim_dir):
+        """POST /api/simulation/prepare/status returns already_prepared=False when profile is missing."""
+        sim_id = _create_sim(
+            test_sim_dir,
+            "sim_status_unprep_tw",
+            enable_twitter=True,
+            enable_reddit=False,
+            twitter_profiles_count=0,  # profile file missing
+        )
+
+        resp = app_client.post("/api/simulation/prepare/status", json={"simulation_id": sim_id})
+        assert resp.status_code == 200
+        assert resp.json["success"] is True
+        data = resp.json["data"]
+        assert data["already_prepared"] is False
+        assert data["status"] == "not_started"
+        assert data["progress"] == 0
+
 
 
 # ============================================================================
@@ -620,3 +811,92 @@ class TestStartSimulationPlatformResolution:
             resp = app_client.post("/api/simulation/start", json={"simulation_id": sim_id, "platform": "twitter"})
             assert resp.status_code == 200
             assert mock_start.call_args[1]["platform"] == "twitter"
+
+    def test_explicit_platform_none_twitter_only_defaults_to_twitter(self, app_client, test_sim_dir):
+        """Explicit platform=None on Twitter-only simulation defaults to 'twitter'."""
+        sim_id = _create_sim(
+            test_sim_dir,
+            "sim_none_tw",
+            enable_twitter=True,
+            enable_reddit=False,
+            twitter_profiles_count=2,
+        )
+
+        dummy_run_state = SimulationRunState(
+            simulation_id=sim_id,
+            runner_status=RunnerStatus.RUNNING,
+            process_pid=1006,
+        )
+
+        with patch.object(SimulationRunner, "is_process_alive", return_value=False), \
+             patch.object(SimulationRunner, "get_run_state", return_value=None), \
+             patch.object(SimulationRunner, "start_simulation", return_value=dummy_run_state) as mock_start:
+
+            resp = app_client.post("/api/simulation/start", json={"simulation_id": sim_id, "platform": None})
+            assert resp.status_code == 200
+            assert mock_start.call_args[1]["platform"] == "twitter"
+
+    def test_explicit_platform_none_dual_platform_defaults_to_parallel(self, app_client, test_sim_dir):
+        """Explicit platform=None on dual-platform simulation defaults to 'parallel'."""
+        sim_id = _create_sim(
+            test_sim_dir,
+            "sim_none_dual",
+            enable_twitter=True,
+            enable_reddit=True,
+            twitter_profiles_count=2,
+            reddit_profiles_count=2,
+        )
+
+        dummy_run_state = SimulationRunState(
+            simulation_id=sim_id,
+            runner_status=RunnerStatus.RUNNING,
+            process_pid=1007,
+        )
+
+        with patch.object(SimulationRunner, "is_process_alive", return_value=False), \
+             patch.object(SimulationRunner, "get_run_state", return_value=None), \
+             patch.object(SimulationRunner, "start_simulation", return_value=dummy_run_state) as mock_start:
+
+            resp = app_client.post("/api/simulation/start", json={"simulation_id": sim_id, "platform": None})
+            assert resp.status_code == 200
+            assert mock_start.call_args[1]["platform"] == "parallel"
+
+    def test_both_platforms_disabled_defaults_to_reddit(self, app_client, test_sim_dir):
+        """When both platforms are disabled, omitted platform defaults to 'reddit'."""
+        sim_id = _create_sim(
+            test_sim_dir,
+            "sim_both_disabled_start",
+            enable_twitter=False,
+            enable_reddit=False,
+            twitter_profiles_count=0,
+            reddit_profiles_count=0,
+        )
+
+        dummy_run_state = SimulationRunState(
+            simulation_id=sim_id,
+            runner_status=RunnerStatus.RUNNING,
+            process_pid=1008,
+        )
+
+        with patch.object(SimulationRunner, "is_process_alive", return_value=False), \
+             patch.object(SimulationRunner, "get_run_state", return_value=None), \
+             patch.object(SimulationRunner, "start_simulation", return_value=dummy_run_state) as mock_start:
+
+            resp = app_client.post("/api/simulation/start", json={"simulation_id": sim_id})
+            assert resp.status_code == 200
+            assert mock_start.call_args[1]["platform"] == "reddit"
+
+    def test_invalid_platform_type_returns_400(self, app_client, test_sim_dir):
+        """Unsupported platform string returns 400 error."""
+        sim_id = _create_sim(
+            test_sim_dir,
+            "sim_invalid_platform",
+            enable_twitter=True,
+            enable_reddit=False,
+            twitter_profiles_count=2,
+        )
+
+        resp = app_client.post("/api/simulation/start", json={"simulation_id": sim_id, "platform": "mastodon"})
+        assert resp.status_code == 400
+        assert resp.json["success"] is False
+        assert "Invalid platform type" in resp.json["error"]
