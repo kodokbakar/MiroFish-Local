@@ -3,6 +3,8 @@ Simulation-related API routes
 Step2: Entity reading and filtering, OASIS simulation preparation and execution (fully automated)
 """
 
+import csv
+import json
 import os
 import traceback
 from flask import request, jsonify, send_file, current_app
@@ -255,8 +257,11 @@ def _check_simulation_prepared(simulation_id: str) -> tuple:
     Check if simulation is ready
     
     Check conditions:
-    1. state.json exists and status is "ready"
-    2. Required files exist: reddit_profiles.json, twitter_profiles.csv, simulation_config.json
+    1. state.json exists and status is in prepared_statuses
+    2. Required files exist based on enabled platforms:
+       - simulation_config.json
+       - reddit_profiles.json (if enable_reddit)
+       - twitter_profiles.csv (if enable_twitter)
     
     Note: run scripts (run_*.py) remain in backend/scripts/ directory, no longer copied to simulation directory
     
@@ -266,22 +271,35 @@ def _check_simulation_prepared(simulation_id: str) -> tuple:
     Returns:
         (is_prepared: bool, info: dict)
     """
-    import os
-    from ..config import Config
-    
     simulation_dir = os.path.join(Config.OASIS_SIMULATION_DATA_DIR, simulation_id)
     
     # Check if directory exists
     if not os.path.exists(simulation_dir):
         return False, {"reason": "Simulation directory does not exist"}
     
+    state_file = os.path.join(simulation_dir, "state.json")
+    if not os.path.exists(state_file):
+        return False, {
+            "reason": "Missing required files",
+            "missing_files": ["state.json"],
+            "existing_files": []
+        }
+    
+    try:
+        with open(state_file, 'r', encoding='utf-8') as f:
+            state_data = json.load(f)
+    except Exception as e:
+        return False, {"reason": f"Failed to read state file: {str(e)}"}
+    
+    enable_twitter = state_data.get("enable_twitter", True) if isinstance(state_data, dict) else True
+    enable_reddit = state_data.get("enable_reddit", True) if isinstance(state_data, dict) else True
+
     # Required file list (scripts not included, scripts are in backend/scripts/)
-    required_files = [
-        "state.json",
-        "simulation_config.json",
-        "reddit_profiles.json",
-        "twitter_profiles.csv"
-    ]
+    required_files = ["state.json", "simulation_config.json"]
+    if enable_reddit:
+        required_files.append("reddit_profiles.json")
+    if enable_twitter:
+        required_files.append("twitter_profiles.csv")
     
     # Check if files exist
     existing_files = []
@@ -301,12 +319,7 @@ def _check_simulation_prepared(simulation_id: str) -> tuple:
         }
     
     # Check status in state.json
-    state_file = os.path.join(simulation_dir, "state.json")
     try:
-        import json
-        with open(state_file, 'r', encoding='utf-8') as f:
-            state_data = json.load(f)
-        
         status = state_data.get("status", "")
         config_generated = state_data.get("config_generated", False)
         
@@ -314,24 +327,40 @@ def _check_simulation_prepared(simulation_id: str) -> tuple:
         logger.debug(f"Detect simulation preparation status: {simulation_id}, status={status}, config_generated={config_generated}")
         
         # If config_generated=True and files exist, consider preparation complete
-        # The following statuses indicate preparation is complete：
+        # The following statuses indicate preparation is complete:
         # - ready: Preparation complete, can run
         # - preparing: If config_generated=True, description shows completed
         # - running: Running, preparation already completed
-        # - completed: Execution complete, preparation already completed
+        # - paused: Paused, preparation already completed
         # - stopped: Stopped, preparation already completed
+        # - completed: Execution complete, preparation already completed
         # - failed: Execution failed (but preparation is not completed)
-        prepared_statuses = ["ready", "preparing", "running", "completed", "stopped", "failed"]
+        prepared_statuses = ["ready", "preparing", "running", "paused", "stopped", "completed", "failed"]
         if status in prepared_statuses and config_generated:
             # Get file statistics
-            profiles_file = os.path.join(simulation_dir, "reddit_profiles.json")
-            config_file = os.path.join(simulation_dir, "simulation_config.json")
-            
             profiles_count = 0
-            if os.path.exists(profiles_file):
-                with open(profiles_file, 'r', encoding='utf-8') as f:
-                    profiles_data = json.load(f)
-                    profiles_count = len(profiles_data) if isinstance(profiles_data, list) else 0
+            if enable_reddit:
+                reddit_file = os.path.join(simulation_dir, "reddit_profiles.json")
+                if os.path.exists(reddit_file):
+                    try:
+                        with open(reddit_file, 'r', encoding='utf-8') as f:
+                            profiles_data = json.load(f)
+                            profiles_count = len(profiles_data) if isinstance(profiles_data, list) else 0
+                    except Exception as e:
+                        logger.warning(f"Failed to read reddit_profiles.json: {e}")
+
+            if enable_twitter and profiles_count == 0:
+                twitter_file = os.path.join(simulation_dir, "twitter_profiles.csv")
+                if os.path.exists(twitter_file):
+                    try:
+                        with open(twitter_file, 'r', encoding='utf-8') as f:
+                            reader = csv.DictReader(f)
+                            profiles_count = sum(1 for _ in reader)
+                    except Exception as e:
+                        logger.warning(f"Failed to read twitter_profiles.csv: {e}")
+
+            if profiles_count == 0:
+                profiles_count = state_data.get("profiles_count", 0)
             
             # If status is "preparing" but files are completed, update status to "ready"
             if status == "preparing":
@@ -1537,7 +1566,29 @@ def start_simulation():
                 "error": "Please provide simulation_id"
             }), 400
 
-        platform = data.get('platform', 'parallel')
+        # Check if simulation exists
+        manager = SimulationManager()
+        state = manager.get_simulation(simulation_id)
+
+        if not state:
+            return jsonify({
+                "success": False,
+                "error": f"Simulation does not exist: {simulation_id}"
+            }), 404
+
+        platform = data.get('platform')
+        if not platform:
+            if state.enable_twitter and state.enable_reddit:
+                platform = 'parallel'
+            else:
+                platform = state.get_default_platform()
+
+        if platform not in ['twitter', 'reddit', 'parallel']:
+            return jsonify({
+                "success": False,
+                "error": f"Invalid platform type: {platform}，Optional: twitter/reddit/parallel"
+            }), 400
+
         max_rounds = data.get('max_rounds')  # Optional: Maximum simulation rounds
         enable_graph_memory_update = data.get('enable_graph_memory_update', False)  # Optional：IsFalseEnable knowledge graph memory update
         force = data.get('force', False)  # Optional：Force restart
@@ -1556,22 +1607,6 @@ def start_simulation():
                     "success": False,
                     "error": "max_rounds Must be valid integer"
                 }), 400
-
-        if platform not in ['twitter', 'reddit', 'parallel']:
-            return jsonify({
-                "success": False,
-                "error": f"Invalid platform type: {platform}，Optional: twitter/reddit/parallel"
-            }), 400
-
-        # Check if simulation is ready
-        manager = SimulationManager()
-        state = manager.get_simulation(simulation_id)
-
-        if not state:
-            return jsonify({
-                "success": False,
-                "error": f"Simulation does not exist: {simulation_id}"
-            }), 404
 
         force_restarted = False
         
@@ -1607,14 +1642,16 @@ def start_simulation():
 
             if is_prepared:
                 # Process does not exist or has ended, reset status to ready
-                logger.info(f"Simulation {simulation_id} preparation complete, resetting status to ready (previous status: {state.status.value})")
+                prev_status = getattr(state.status, 'value', state.status)
+                logger.info(f"Simulation {simulation_id} preparation complete, resetting status to ready (previous status: {prev_status})")
                 state.status = SimulationStatus.READY
                 manager._save_simulation_state(state)
             else:
                 # Preparation not complete
+                current_status = getattr(state.status, 'value', state.status)
                 return jsonify({
                     "success": False,
-                    "error": f"Simulation not ready. Current status: {state.status.value}. Please call /prepare first"
+                    "error": f"Simulation not ready. Current status: {current_status}. Please call /prepare first"
                 }), 400
         
         # Get knowledge graphID and storage（For knowledge graph memory update）
