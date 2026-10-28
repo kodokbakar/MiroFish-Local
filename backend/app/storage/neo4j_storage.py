@@ -24,6 +24,7 @@ from .graph_storage import GraphStorage
 from .embedding_service import EmbeddingService
 from .ner_extractor import NERExtractor
 from .search_service import SearchService
+from .neo4j_records import edge_to_dict, node_to_dict
 from . import neo4j_schema
 from .label_utils import LABEL_PATTERN, validate_label, is_valid_label
 
@@ -646,56 +647,5 @@ class Neo4jStorage(GraphStorage):
     # Dict conversion helpers
     # ----------------------------------------------------------------
 
-    @staticmethod
-    def _node_to_dict(node, labels: List[str]) -> Dict[str, Any]:
-        """Convert Neo4j node to the standard node dict format."""
-        props = dict(node)
-        attrs_json = props.pop("attributes_json", "{}")
-        try:
-            attributes = json.loads(attrs_json) if attrs_json else {}
-        except (json.JSONDecodeError, TypeError):
-            attributes = {}
-
-        # Remove internal fields from dict
-        props.pop("embedding", None)
-        props.pop("name_lower", None)
-
-        return {
-            "uuid": props.get("uuid", ""),
-            "name": props.get("name", ""),
-            "labels": [l for l in labels if l != "Entity"] if labels else [],
-            "summary": props.get("summary", ""),
-            "attributes": attributes,
-            "created_at": props.get("created_at"),
-        }
-
-    @staticmethod
-    def _edge_to_dict(rel, source_uuid: str, target_uuid: str) -> Dict[str, Any]:
-        """Convert Neo4j relationship to the standard edge dict format."""
-        props = dict(rel)
-        attrs_json = props.pop("attributes_json", "{}")
-        try:
-            attributes = json.loads(attrs_json) if attrs_json else {}
-        except (json.JSONDecodeError, TypeError):
-            attributes = {}
-
-        # Remove internal fields
-        props.pop("fact_embedding", None)
-
-        episode_ids = props.get("episode_ids", [])
-        if episode_ids and not isinstance(episode_ids, list):
-            episode_ids = [str(episode_ids)]
-
-        return {
-            "uuid": props.get("uuid", ""),
-            "name": props.get("name", ""),
-            "fact": props.get("fact", ""),
-            "source_node_uuid": source_uuid,
-            "target_node_uuid": target_uuid,
-            "attributes": attributes,
-            "created_at": props.get("created_at"),
-            "valid_at": props.get("valid_at"),
-            "invalid_at": props.get("invalid_at"),
-            "expired_at": props.get("expired_at"),
-            "episode_ids": episode_ids,
-        }
+    _node_to_dict = staticmethod(node_to_dict)
+    _edge_to_dict = staticmethod(edge_to_dict)
