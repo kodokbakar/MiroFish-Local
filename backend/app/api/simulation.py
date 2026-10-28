@@ -1575,40 +1575,38 @@ def start_simulation():
 
         force_restarted = False
         
+        # Check if simulation is currently running
+        run_state = SimulationRunner.get_run_state(simulation_id)
+        is_running = (run_state and run_state.runner_status in [RunnerStatus.RUNNING, RunnerStatus.STARTING]) or SimulationRunner.is_process_alive(simulation_id, run_state)
+        if is_running:
+            if force:
+                # Force mode: Stop running simulation
+                logger.info(f"Force mode: Stop running simulation {simulation_id}")
+                try:
+                    SimulationRunner.stop_simulation(simulation_id)
+                except Exception as e:
+                    logger.warning(f"Warning when stopping simulation: {str(e)}")
+            else:
+                return jsonify({
+                    "success": False,
+                    "error": "Simulation is running. Please call /stop first or use force=true to force restart."
+                }), 400
+
+        # If force mode, clean runtime logs AFTER stopping the process
+        if force:
+            logger.info(f"Force mode: cleaning simulation runtime files for {simulation_id}")
+            cleanup_result = SimulationRunner.cleanup_simulation_logs(simulation_id)
+            if not cleanup_result.get("success"):
+                logger.warning(f"Warning when cleaning logs: {cleanup_result.get('errors')}")
+            force_restarted = True
+
         # Intelligently handle status: if preparation work is complete, reset status to ready
         if state.status != SimulationStatus.READY:
             # Check if preparation is complete
             is_prepared, prepare_info = _check_simulation_prepared(simulation_id)
 
             if is_prepared:
-                # Preparation work complete, verify if simulation is not already running
-                if state.status == SimulationStatus.RUNNING:
-                    # Check if simulation process is really running
-                    run_state = SimulationRunner.get_run_state(simulation_id)
-                    if run_state and run_state.runner_status.value == "running":
-                        # Process is indeed running
-                        if force:
-                            # Force mode：Stop runningSimulation
-                            logger.info(f"Force mode：Stop runningSimulation {simulation_id}")
-                            try:
-                                SimulationRunner.stop_simulation(simulation_id)
-                            except Exception as e:
-                                logger.warning(f"Warning when stopping simulation: {str(e)}")
-                        else:
-                            return jsonify({
-                                "success": False,
-                                "error": f"Simulation is running. Please call /stop first or use force=true to force restart."
-                            }), 400
-
-                # If force mode，Clean runtime logs
-                if force:
-                    logger.info(f"Force mode: cleaning simulation runtime files for {simulation_id}")
-                    cleanup_result = SimulationRunner.cleanup_simulation_logs(simulation_id)
-                    if not cleanup_result.get("success"):
-                        logger.warning(f"Warning when cleaning logs: {cleanup_result.get('errors')}")
-                    force_restarted = True
-
-                # Process does not exist or has ended，Reset status to ready
+                # Process does not exist or has ended, reset status to ready
                 logger.info(f"Simulation {simulation_id} preparation complete, resetting status to ready (previous status: {state.status.value})")
                 state.status = SimulationStatus.READY
                 manager._save_simulation_state(state)
