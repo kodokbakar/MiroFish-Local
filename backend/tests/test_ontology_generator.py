@@ -558,6 +558,42 @@ class TestOntologyGeneratorValidateAndProcess:
         assert len(processed["edge_types"]) == 1
 
 
+    def test_entity_unhashable_dict_name(self, generator: OntologyGenerator):
+        """Entity with dict name should be handled safely without TypeError."""
+        raw_result = {
+            "entity_types": [{"name": {"key": "val"}, "description": "Dict name"}],
+            "edge_types": [],
+        }
+        processed = generator._validate_and_process(raw_result)
+        names = [e["name"] for e in processed["entity_types"]]
+        assert "Person" in names
+        assert "Organization" in names
+
+    def test_edge_source_targets_unhashable_source_target(self, generator: OntologyGenerator):
+        """Edge source_targets with unhashable source/target (list/dict) should not raise TypeError."""
+        raw_result = {
+            "entity_types": [{"name": "Person"}],
+            "edge_types": [
+                {
+                    "name": "RELATION",
+                    "source_targets": [{"source": ["unhashable"], "target": {"key": "val"}}],
+                }
+            ],
+        }
+        processed = generator._validate_and_process(raw_result)
+        assert processed["edge_types"][0]["source_targets"] == [{"source": ["unhashable"], "target": {"key": "val"}}]
+
+    def test_entity_and_edge_non_string_description(self, generator: OntologyGenerator):
+        """Entity and edge with non-string, non-None description (int, dict, list) should default to empty string."""
+        raw_result = {
+            "entity_types": [{"name": "Person", "description": 12345}],
+            "edge_types": [{"name": "FOLLOWS", "description": ["some", "desc"]}],
+        }
+        processed = generator._validate_and_process(raw_result)
+        person = next(e for e in processed["entity_types"] if e["name"] == "Person")
+        assert person["description"] == ""
+        assert processed["edge_types"][0]["description"] == ""
+
 def test_ontology_generation_end_to_end_malformed_llm_payload():
     """OntologyGenerator.generate() end-to-end with mocked LLM returning malformed payloads."""
     malformed_payload = {
