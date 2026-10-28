@@ -378,6 +378,110 @@ class TestOntologyGeneratorValidateAndProcess:
         assert edge["attributes"] == []
 
 
+    def test_edge_source_targets_none(self, generator: OntologyGenerator):
+        """Edge with source_targets = None should default to empty list."""
+        raw_result = {
+            "entity_types": [],
+            "edge_types": [{"name": "FOLLOWS", "source_targets": None}],
+        }
+        processed = generator._validate_and_process(raw_result)
+        assert processed["edge_types"][0]["source_targets"] == []
+
+    def test_edge_source_targets_string_list(self, generator: OntologyGenerator):
+        """Edge with source_targets as a list of strings should discard non-dict items."""
+        raw_result = {
+            "entity_types": [],
+            "edge_types": [{"name": "FOLLOWS", "source_targets": ["Person -> Organization"]}],
+        }
+        processed = generator._validate_and_process(raw_result)
+        assert processed["edge_types"][0]["source_targets"] == []
+
+    def test_edge_source_targets_single_dict(self, generator: OntologyGenerator):
+        """Edge with source_targets as a single dict should be wrapped in a list and remapped."""
+        raw_result = {
+            "entity_types": [{"name": "person"}, {"name": "organization"}],
+            "edge_types": [
+                {
+                    "name": "works_for",
+                    "source_targets": {"source": "person", "target": "organization"},
+                }
+            ],
+        }
+        processed = generator._validate_and_process(raw_result)
+        assert processed["edge_types"][0]["source_targets"] == [
+            {"source": "Person", "target": "Organization"}
+        ]
+
+    def test_edge_source_targets_mixed(self, generator: OntologyGenerator):
+        """Edge with mixed/non-dict source_targets should keep only dict items."""
+        raw_result = {
+            "entity_types": [],
+            "edge_types": [
+                {
+                    "name": "INTERACTS",
+                    "source_targets": [
+                        {"source": "Person", "target": "Organization"},
+                        "invalid string",
+                        123,
+                        None,
+                        {"source": "A", "target": "B"},
+                    ],
+                }
+            ],
+        }
+        processed = generator._validate_and_process(raw_result)
+        assert processed["edge_types"][0]["source_targets"] == [
+            {"source": "Person", "target": "Organization"},
+            {"source": "A", "target": "B"},
+        ]
+
+    def test_entity_and_edge_types_none(self, generator: OntologyGenerator):
+        """entity_types and edge_types as None should be handled safely without TypeError."""
+        raw_result = {
+            "entity_types": None,
+            "edge_types": None,
+            "analysis_summary": None,
+        }
+        processed = generator._validate_and_process(raw_result)
+        assert isinstance(processed["entity_types"], list)
+        assert isinstance(processed["edge_types"], list)
+        assert processed["edge_types"] == []
+        assert processed["analysis_summary"] == ""
+        names = [e["name"] for e in processed["entity_types"]]
+        assert "Person" in names
+        assert "Organization" in names
+
+    def test_entity_types_containing_strings(self, generator: OntologyGenerator):
+        """Non-dict elements in entity_types should be filtered out without AttributeError."""
+        raw_result = {
+            "entity_types": ["InvalidString", {"name": "User"}, 42, None],
+            "edge_types": [],
+        }
+        processed = generator._validate_and_process(raw_result)
+        names = [e["name"] for e in processed["entity_types"]]
+        assert "User" in names
+        assert "InvalidString" not in names
+        assert 42 not in names
+
+    def test_edge_types_containing_strings(self, generator: OntologyGenerator):
+        """Non-dict elements in edge_types should be filtered out without errors."""
+        raw_result = {
+            "entity_types": [],
+            "edge_types": ["InvalidEdge", {"name": "FOLLOWS"}, None, 123],
+        }
+        processed = generator._validate_and_process(raw_result)
+        assert len(processed["edge_types"]) == 1
+        assert processed["edge_types"][0]["name"] == "FOLLOWS"
+
+    def test_edge_non_string_name(self, generator: OntologyGenerator):
+        """Edge with non-string name should not raise AttributeError on .upper()."""
+        raw_result = {
+            "entity_types": [],
+            "edge_types": [{"name": 12345, "description": "Numeric name edge"}],
+        }
+        processed = generator._validate_and_process(raw_result)
+        assert processed["edge_types"][0]["name"] == 12345
+
 def _generator_for_test() -> OntologyGenerator:
     generator = OntologyGenerator(llm_client=object())
     generator.MAX_TEXT_LENGTH_FOR_LLM = 2000

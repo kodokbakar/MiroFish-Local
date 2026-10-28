@@ -414,13 +414,19 @@ Based on the above content, design entity types and relationship types suitable 
     def _validate_and_process(self, result: Dict[str, Any]) -> Dict[str, Any]:
         """Validate and post-process result"""
 
-        # Ensure necessary fields exist
-        if "entity_types" not in result:
+        # Ensure necessary fields exist and contain valid types
+        if not isinstance(result.get("entity_types"), list):
             result["entity_types"] = []
-        if "edge_types" not in result:
+        else:
+            result["entity_types"] = [e for e in result["entity_types"] if isinstance(e, dict)]
+
+        if not isinstance(result.get("edge_types"), list):
             result["edge_types"] = []
-        if "analysis_summary" not in result:
-            result["analysis_summary"] = ""
+        else:
+            result["edge_types"] = [e for e in result["edge_types"] if isinstance(e, dict)]
+
+        if not isinstance(result.get("analysis_summary"), str):
+            result["analysis_summary"] = str(result.get("analysis_summary") or "")
 
         # Validate entity types
         # Record mapping from original name to PascalCase for updating source_targets in edges
@@ -431,10 +437,11 @@ Based on the above content, design entity types and relationship types suitable 
             # Enforce PascalCase for entity name
             if "name" in entity:
                 original_name = entity["name"]
-                entity["name"] = _to_pascal_case(original_name)
-                if entity["name"] != original_name:
-                    logger.warning(f"Entity type name '{original_name}' auto-converted to '{entity['name']}'")
-                entity_name_map[original_name] = entity["name"]
+                if isinstance(original_name, str):
+                    entity["name"] = _to_pascal_case(original_name)
+                    if entity["name"] != original_name:
+                        logger.warning(f"Entity type name '{original_name}' auto-converted to '{entity['name']}'")
+                    entity_name_map[original_name] = entity["name"]
             if "attributes" not in entity:
                 entity["attributes"] = []
             elif isinstance(entity["attributes"], str):
@@ -460,17 +467,32 @@ Based on the above content, design entity types and relationship types suitable 
             # Enforce upper case for edge name
             if "name" in edge:
                 original_name = edge["name"]
-                edge["name"] = original_name.upper()
-                if edge["name"] != original_name:
-                    logger.warning(f"Edge type name '{original_name}' auto-converted to '{edge['name']}'")
-            # Update entity name references in source_targets to match PascalCase conversion
-            for st in edge.get("source_targets", []):
-                if st.get("source") in entity_name_map:
-                    st["source"] = entity_name_map[st["source"]]
-                if st.get("target") in entity_name_map:
-                    st["target"] = entity_name_map[st["target"]]
-            if "source_targets" not in edge:
-                edge["source_targets"] = []
+                if isinstance(original_name, str):
+                    edge["name"] = original_name.upper()
+                    if edge["name"] != original_name:
+                        logger.warning(f"Edge type name '{original_name}' auto-converted to '{edge['name']}'")
+
+            # Validate and normalize source_targets
+            raw_st = edge.get("source_targets")
+            if isinstance(raw_st, dict):
+                raw_st = [raw_st]
+            elif not isinstance(raw_st, list):
+                raw_st = []
+
+            valid_st = []
+            for st in raw_st:
+                if not isinstance(st, dict):
+                    continue
+                # Update entity name references in source_targets to match PascalCase conversion
+                source = st.get("source")
+                if isinstance(source, str) and source in entity_name_map:
+                    st["source"] = entity_name_map[source]
+                target = st.get("target")
+                if isinstance(target, str) and target in entity_name_map:
+                    st["target"] = entity_name_map[target]
+                valid_st.append(st)
+
+            edge["source_targets"] = valid_st
             if "attributes" not in edge:
                 edge["attributes"] = []
             elif isinstance(edge["attributes"], str):
