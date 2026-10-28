@@ -13,6 +13,7 @@ from .neo4j_storage import Neo4jStorage
 from .embedding_service import EmbeddingService, EmbeddingError
 from .ner_extractor import NERExtractor
 from .search_service import SearchService
+from .label_utils import LABEL_PATTERN, validate_label, is_valid_label
 
 __all__ = [
     "GraphStorage",
@@ -21,4 +22,7 @@ __all__ = [
     "EmbeddingError",
     "NERExtractor",
     "SearchService",
+    "LABEL_PATTERN",
+    "validate_label",
+    "is_valid_label",
 ]

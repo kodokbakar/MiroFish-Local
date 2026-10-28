@@ -225,6 +225,11 @@ class SimulationRunner:
     
     # Graph memory update configuration
     _graph_memory_enabled: Dict[str, bool] = {}  # simulation_id -> enabled
+    @classmethod
+    def is_graph_memory_enabled(cls, simulation_id: str) -> bool:
+        """Check if graph memory update is enabled for a simulation"""
+        return cls._graph_memory_enabled.get(simulation_id, False)
+
     
     @classmethod
     def get_run_state(cls, simulation_id: str) -> Optional[SimulationRunState]:
@@ -380,9 +385,10 @@ class SimulationRunner:
             if not graph_id:
                 raise ValueError("Must provide graph_id when enabling graph memory update")
             
+            if not storage:
+                raise ValueError("Must provide storage (GraphStorage) when enabling graph memory update")
+            
             try:
-                if not storage:
-                    raise ValueError("Must provide storage (GraphStorage) when enabling graph memory update")
                 GraphMemoryManager.create_updater(simulation_id, graph_id, storage)
                 cls._graph_memory_enabled[simulation_id] = True
                 logger.info(f"Graph memory update enabled: simulation_id={simulation_id}, graph_id={graph_id}")

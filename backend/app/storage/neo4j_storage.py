@@ -25,6 +25,14 @@ from .embedding_service import EmbeddingService
 from .ner_extractor import NERExtractor
 from .search_service import SearchService
 from . import neo4j_schema
+from .label_utils import LABEL_PATTERN, validate_label, is_valid_label
+
+__all__ = [
+    "Neo4jStorage",
+    "LABEL_PATTERN",
+    "validate_label",
+    "is_valid_label",
+]
 
 logger = logging.getLogger('mirofish.neo4j_storage')
 
@@ -245,6 +253,25 @@ class Neo4jStorage(GraphStorage):
                 def _merge_entity(tx, _uuid=e_uuid, _name=ename, _type=etype,
                                   _attrs=attrs, _embedding=embedding,
                                   _summary=summary_text, _now=now):
+                    # Check if entity already exists to preserve attributes
+                    rec = tx.run(
+                        """
+                        MATCH (n:Entity {graph_id: $gid, name_lower: $name_lower})
+                        RETURN n.attributes_json AS attributes_json
+                        """,
+                        gid=graph_id,
+                        name_lower=_name.lower(),
+                    ).single()
+
+                    merged_attrs = dict(_attrs) if isinstance(_attrs, dict) else {}
+                    if rec and rec["attributes_json"]:
+                        try:
+                            existing_attrs = json.loads(rec["attributes_json"])
+                            if isinstance(existing_attrs, dict):
+                                merged_attrs = {**existing_attrs, **merged_attrs}
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+
                     # MERGE by graph_id + lowercase name to deduplicate
                     result = tx.run(
                         """
@@ -268,7 +295,7 @@ class Neo4jStorage(GraphStorage):
                         uuid=_uuid,
                         name=_name,
                         summary=_summary,
-                        attrs_json=json.dumps(_attrs, ensure_ascii=False),
+                        attrs_json=json.dumps(merged_attrs, ensure_ascii=False),
                         embedding=_embedding,
                         now=_now,
                     )
@@ -281,6 +308,7 @@ class Neo4jStorage(GraphStorage):
                 # Add entity type label
                 if etype and etype != "Entity":
                     try:
+                        validate_label(etype)
                         def _add_label(tx, _name_lower=ename.lower()):
                             tx.run(
                                 f"MATCH (n:Entity {{graph_id: $gid, name_lower: $nl}}) SET n:`{etype}`",
@@ -288,9 +316,10 @@ class Neo4jStorage(GraphStorage):
                                 nl=_name_lower,
                             )
                         self._call_with_retry(session.execute_write, _add_label)
+                    except ValueError as e:
+                        logger.warning(f"Skipping invalid entity label '{etype}' for '{ename}': {e}")
                     except Exception as e:
                         logger.warning(f"Failed to add label '{etype}' to '{ename}': {e}")
-
             # Create relations
             for idx, relation in enumerate(relations):
                 source_name = relation["source"]
@@ -319,19 +348,33 @@ class Neo4jStorage(GraphStorage):
                         """
                         MATCH (src:Entity {uuid: $src_uuid})
                         MATCH (tgt:Entity {uuid: $tgt_uuid})
-                        CREATE (src)-[r:RELATION {
-                            uuid: $uuid,
-                            graph_id: $gid,
-                            name: $name,
-                            fact: $fact,
-                            fact_embedding: $fact_embedding,
-                            attributes_json: '{}',
-                            episode_ids: [$episode_id],
-                            created_at: $now,
-                            valid_at: null,
-                            invalid_at: null,
-                            expired_at: null
-                        }]->(tgt)
+                        MERGE (src)-[r:RELATION {graph_id: $gid, name: $name}]->(tgt)
+                        ON CREATE SET
+                            r.uuid = $uuid,
+                            r.graph_id = $gid,
+                            r.name = $name,
+                            r.fact = $fact,
+                            r.fact_embedding = $fact_embedding,
+                            r.attributes_json = '{}',
+                            r.episode_ids = [$episode_id],
+                            r.created_at = $now,
+                            r.valid_at = null,
+                            r.invalid_at = null,
+                            r.expired_at = null
+                        ON MATCH SET
+                            r.episode_ids = CASE
+                                WHEN r.episode_ids IS NULL THEN [$episode_id]
+                                WHEN $episode_id IN r.episode_ids THEN r.episode_ids
+                                ELSE r.episode_ids + [$episode_id]
+                            END,
+                            r.fact_embedding = CASE
+                                WHEN r.fact = '' OR r.fact IS NULL THEN $fact_embedding
+                                ELSE r.fact_embedding
+                            END,
+                            r.fact = CASE
+                                WHEN r.fact = '' OR r.fact IS NULL THEN $fact
+                                ELSE r.fact
+                            END
                         """,
                         src_uuid=_source_uuid,
                         tgt_uuid=_target_uuid,
@@ -343,7 +386,6 @@ class Neo4jStorage(GraphStorage):
                         episode_id=_episode_id,
                         now=_now,
                     )
-
                 self._call_with_retry(session.execute_write, _create_relation)
 
         logger.info(f"[add_text] Chunk done: episode={episode_id}")
@@ -438,8 +480,10 @@ class Neo4jStorage(GraphStorage):
             return self._call_with_retry(session.execute_read, _read)
 
     def get_nodes_by_label(self, graph_id: str, label: str) -> List[Dict[str, Any]]:
+        validate_label(label)
+
         def _read(tx):
-            # Dynamic label in query (safe — label comes from ontology, not user input)
+            # Dynamic label in query (safe — validated against LABEL_PATTERN)
             query = f"""
                 MATCH (n:Entity:`{label}` {{graph_id: $gid}})
                 RETURN n, labels(n) AS labels
