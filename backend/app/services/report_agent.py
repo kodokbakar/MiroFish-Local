@@ -978,6 +978,9 @@ class ReportAgent:
         Returns:
             Tool execution result (text format)
         """
+        if parameters is None or not isinstance(parameters, dict):
+            parameters = {}
+
         logger.info(f"Executing tool: {tool_name}, parameters: {parameters}")
         
         try:
@@ -1092,7 +1095,8 @@ class ReportAgent:
         for match in re.finditer(xml_pattern, response, re.DOTALL):
             try:
                 call_data = json.loads(match.group(1))
-                tool_calls.append(call_data)
+                if isinstance(call_data, dict) and self._is_valid_tool_call(call_data):
+                    tool_calls.append(call_data)
             except json.JSONDecodeError:
                 pass
 
@@ -1126,14 +1130,20 @@ class ReportAgent:
 
     def _is_valid_tool_call(self, data: dict) -> bool:
         """Validate if the parsed JSON is a valid tool call"""
+        if not isinstance(data, dict):
+            return False
         # Support both {"name": ..., "parameters": ...} and {"tool": ..., "params": ...} key names
         tool_name = data.get("name") or data.get("tool")
         if tool_name and tool_name in self.VALID_TOOL_NAMES:
             # Normalize key names to name / parameters
             if "tool" in data:
                 data["name"] = data.pop("tool")
-            if "params" in data and "parameters" not in data:
-                data["parameters"] = data.pop("params")
+            if "params" in data:
+                params_val = data.pop("params")
+                if not isinstance(data.get("parameters"), dict):
+                    data["parameters"] = params_val
+            if not isinstance(data.get("parameters"), dict):
+                data["parameters"] = {}
             return True
         return False
     
@@ -1470,21 +1480,29 @@ class ReportAgent:
 
                 # Only execute the first tool call
                 call = tool_calls[0]
+                tool_name = call.get("name") if isinstance(call, dict) else None
+                if not tool_name:
+                    logger.warning(f"Invalid tool call missing name in section {section.title}: {call}")
+                    continue
+
+                raw_params = call.get("parameters") if isinstance(call, dict) else {}
+                parameters = raw_params if isinstance(raw_params, dict) else {}
+
                 if len(tool_calls) > 1:
-                    logger.info(f"LLM attempted to call {len(tool_calls)} tools, only execute the first: {call['name']}")
+                    logger.info(f"LLM attempted to call {len(tool_calls)} tools, only execute the first: {tool_name}")
 
                 if self.report_logger:
                     self.report_logger.log_tool_call(
                         section_title=section.title,
                         section_index=section_index,
-                        tool_name=call["name"],
-                        parameters=call.get("parameters", {}),
+                        tool_name=tool_name,
+                        parameters=parameters,
                         iteration=iteration + 1
                     )
 
                 result = self._execute_tool(
-                    call["name"],
-                    call.get("parameters", {}),
+                    tool_name,
+                    parameters,
                     report_context=report_context
                 )
 
@@ -1492,13 +1510,13 @@ class ReportAgent:
                     self.report_logger.log_tool_result(
                         section_title=section.title,
                         section_index=section_index,
-                        tool_name=call["name"],
+                        tool_name=tool_name,
                         result=result,
                         iteration=iteration + 1
                     )
 
                 tool_calls_count += 1
-                used_tools.add(call['name'])
+                used_tools.add(tool_name)
 
                 # Build unused tools hint
                 unused_tools = all_tools - used_tools
@@ -1511,7 +1529,7 @@ class ReportAgent:
                 messages.append({
                     "role": "user",
                     "content": REACT_OBSERVATION_TEMPLATE.format(
-                        tool_name=call["name"],
+                        tool_name=tool_name,
                         result=result,
                         tool_calls_count=tool_calls_count,
                         max_tool_calls=self.MAX_TOOL_CALLS_PER_SECTION,
@@ -1895,7 +1913,7 @@ class ReportAgent:
                 return {
                     "response": clean_response.strip(),
                     "tool_calls": tool_calls_made,
-                    "sources": [tc.get("parameters", {}).get("query", "") for tc in tool_calls_made]
+                    "sources": [(tc.get("parameters") or {}).get("query", "") for tc in tool_calls_made]
                 }
             
             # Execute toolcall（limitcount）
@@ -1903,9 +1921,15 @@ class ReportAgent:
             for call in tool_calls[:1]:  # at mostExecute1 time tool call
                 if len(tool_calls_made) >= self.MAX_TOOL_CALLS_PER_CHAT:
                     break
-                result = self._execute_tool(call["name"], call.get("parameters", {}))
+                tool_name = call.get("name") if isinstance(call, dict) else None
+                if not tool_name:
+                    logger.warning("Tool call missing valid name in chat, skipping")
+                    continue
+                raw_params = call.get("parameters") if isinstance(call, dict) else {}
+                parameters = raw_params if isinstance(raw_params, dict) else {}
+                result = self._execute_tool(tool_name, parameters)
                 tool_results.append({
-                    "tool": call["name"],
+                    "tool": tool_name,
                     "result": result[:1500]  # limitresultlength
                 })
                 tool_calls_made.append(call)
@@ -1932,7 +1956,7 @@ class ReportAgent:
         return {
             "response": clean_response.strip(),
             "tool_calls": tool_calls_made,
-            "sources": [tc.get("parameters", {}).get("query", "") for tc in tool_calls_made]
+            "sources": [(tc.get("parameters") or {}).get("query", "") for tc in tool_calls_made]
         }
 
 

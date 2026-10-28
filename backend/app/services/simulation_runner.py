@@ -347,6 +347,13 @@ class SimulationRunner:
                 cls.stop_simulation(simulation_id)
             except Exception as e:
                 logger.warning(f"Error stopping lingering simulation {simulation_id}: {e}")
+        # Wait for any previous monitor thread to exit before starting anew
+        existing_thread = cls._monitor_threads.get(simulation_id)
+        if existing_thread and existing_thread.is_alive() and existing_thread != threading.current_thread():
+            logger.info(f"Waiting for previous monitor thread to exit: {simulation_id}")
+            existing_thread.join(timeout=5.0)
+            if not existing_thread.is_alive() and cls._monitor_threads.get(simulation_id) is existing_thread:
+                cls._monitor_threads.pop(simulation_id, None)
         # Load simulation config
         sim_dir = os.path.join(cls.RUN_STATE_DIR, simulation_id)
         config_path = os.path.join(sim_dir, "simulation_config.json")
@@ -457,6 +464,11 @@ class SimulationRunner:
                     cls._terminate_process(old_proc, simulation_id)
                 except Exception as e:
                     logger.warning(f"Error terminating existing process handle: {e}")
+            existing_thread = cls._monitor_threads.get(simulation_id)
+            if existing_thread and existing_thread.is_alive() and existing_thread != threading.current_thread():
+                existing_thread.join(timeout=5.0)
+                if not existing_thread.is_alive() and cls._monitor_threads.get(simulation_id) is existing_thread:
+                    cls._monitor_threads.pop(simulation_id, None)
 
             process = subprocess.Popen(
                 cmd,
@@ -512,12 +524,15 @@ class SimulationRunner:
         
         if not process or not state:
             return
+
+        monitored_process = process
+        monitored_pid = getattr(process, 'pid', None)
         
         twitter_position = 0
         reddit_position = 0
         
         try:
-            while process.poll() is None:  # Process still running
+            while monitored_process.poll() is None:  # Process still running
                 # Read Twitter action log
                 if os.path.exists(twitter_actions_log):
                     twitter_position = cls._read_action_log(
@@ -530,7 +545,13 @@ class SimulationRunner:
                         reddit_actions_log, reddit_position, state, "reddit"
                     )
                 
-                # Update status
+                # Update status if still our process
+                current_check = cls.get_run_state(simulation_id)
+                if current_check and current_check.process_pid != monitored_pid:
+                    logger.info(f"Monitor loop detected new process for {simulation_id}, exiting loop")
+                    return
+                if current_check and current_check.runner_status in [RunnerStatus.STOPPING, RunnerStatus.STOPPED]:
+                    state.runner_status = current_check.runner_status
                 cls._save_run_state(state)
                 time.sleep(2)
             
@@ -541,39 +562,92 @@ class SimulationRunner:
                 cls._read_action_log(reddit_actions_log, reddit_position, state, "reddit")
             
             # Process ended
-            exit_code = process.returncode
+            exit_code = monitored_process.returncode
             
-            if exit_code == 0:
-                state.runner_status = RunnerStatus.COMPLETED
-                state.completed_at = datetime.now().isoformat()
-                logger.info(f"Simulation completed: {simulation_id}")
+            current_check = cls.get_run_state(simulation_id)
+            if current_check and current_check.process_pid != monitored_pid:
+                logger.warning(
+                    f"Not persisting monitor state for {simulation_id}: PID changed "
+                    f"({monitored_pid} -> {current_check.process_pid})"
+                )
             else:
-                state.runner_status = RunnerStatus.FAILED
-                # Read error info from main log file
-                main_log_path = os.path.join(sim_dir, "simulation.log")
-                error_info = ""
-                try:
-                    if os.path.exists(main_log_path):
-                        with open(main_log_path, 'r', encoding='utf-8') as f:
-                            error_info = f.read()[-2000:]  # Take last 2000 characters
-                except Exception:
-                    pass
-                state.error = f"Process exit code: {exit_code}, error: {error_info}"
-                logger.error(f"Simulation failed: {simulation_id}, error={state.error}")
-            
-            state.twitter_running = False
-            state.reddit_running = False
-            cls._save_run_state(state)
+                target_state = current_check or state
+                if target_state.runner_status in [RunnerStatus.STOPPING, RunnerStatus.STOPPED]:
+                    target_state.runner_status = RunnerStatus.STOPPED
+                    if not target_state.completed_at:
+                        target_state.completed_at = datetime.now().isoformat()
+                    logger.info(f"Simulation stopped: {simulation_id}")
+                elif exit_code == 0:
+                    target_state.runner_status = RunnerStatus.COMPLETED
+                    if not target_state.completed_at:
+                        target_state.completed_at = datetime.now().isoformat()
+                    logger.info(f"Simulation completed: {simulation_id}")
+                else:
+                    target_state.runner_status = RunnerStatus.FAILED
+                    # Read error info from main log file
+                    main_log_path = os.path.join(sim_dir, "simulation.log")
+                    error_info = ""
+                    try:
+                        if os.path.exists(main_log_path):
+                            with open(main_log_path, 'r', encoding='utf-8') as f:
+                                error_info = f.read()[-2000:]  # Take last 2000 characters
+                    except Exception:
+                        pass
+                    target_state.error = f"Process exit code: {exit_code}, error: {error_info}"
+                    if not target_state.completed_at:
+                        target_state.completed_at = datetime.now().isoformat()
+                    logger.error(f"Simulation failed: {simulation_id}, error={target_state.error}")
+                
+                target_state.twitter_running = False
+                target_state.reddit_running = False
+
+                if target_state is not state:
+                    target_state.twitter_actions_count = state.twitter_actions_count
+                    target_state.reddit_actions_count = state.reddit_actions_count
+                    target_state.current_round = state.current_round
+                    target_state.action_distribution = state.action_distribution
+                    target_state.round_summaries = state.round_summaries
+
+                verify_check = cls.get_run_state(simulation_id)
+                if not verify_check or verify_check.process_pid == monitored_pid:
+                    cls._save_run_state(target_state)
+                else:
+                    logger.warning(
+                        f"Not persisting monitor state for {simulation_id}: PID changed "
+                        f"({monitored_pid} -> {verify_check.process_pid})"
+                    )
             
         except Exception as e:
             logger.error(f"Monitor thread exception: {simulation_id}, error={str(e)}")
-            state.runner_status = RunnerStatus.FAILED
-            state.error = str(e)
-            cls._save_run_state(state)
+            current_check = cls.get_run_state(simulation_id)
+            if current_check and current_check.process_pid != monitored_pid:
+                logger.warning(
+                    f"Not persisting monitor exception state for {simulation_id}: PID changed "
+                    f"({monitored_pid} -> {current_check.process_pid})"
+                )
+            else:
+                target_state = current_check or state
+                if target_state.runner_status in [RunnerStatus.STOPPING, RunnerStatus.STOPPED]:
+                    target_state.runner_status = RunnerStatus.STOPPED
+                    if not target_state.completed_at:
+                        target_state.completed_at = datetime.now().isoformat()
+                else:
+                    target_state.runner_status = RunnerStatus.FAILED
+                    target_state.error = str(e)
+                    if not target_state.completed_at:
+                        target_state.completed_at = datetime.now().isoformat()
+                target_state.twitter_running = False
+                target_state.reddit_running = False
+
+                verify_check = cls.get_run_state(simulation_id)
+                if not verify_check or verify_check.process_pid == monitored_pid:
+                    cls._save_run_state(target_state)
         
         finally:
+            is_our_process = cls._processes.get(simulation_id) is monitored_process
+            
             # Stop graph memory updater
-            if cls._graph_memory_enabled.get(simulation_id, False):
+            if is_our_process and cls._graph_memory_enabled.get(simulation_id, False):
                 try:
                     GraphMemoryManager.stop_updater(simulation_id)
                     logger.info(f"Graph memory update stopped: simulation_id={simulation_id}")
@@ -582,22 +656,27 @@ class SimulationRunner:
                 cls._graph_memory_enabled.pop(simulation_id, None)
             
             # Clean up process resources
-            cls._processes.pop(simulation_id, None)
-            cls._action_queues.pop(simulation_id, None)
-            
-            # Close log file handle
-            if simulation_id in cls._stdout_files:
-                try:
-                    cls._stdout_files[simulation_id].close()
-                except Exception:
-                    pass
-                cls._stdout_files.pop(simulation_id, None)
-            if simulation_id in cls._stderr_files and cls._stderr_files[simulation_id]:
-                try:
-                    cls._stderr_files[simulation_id].close()
-                except Exception:
-                    pass
-                cls._stderr_files.pop(simulation_id, None)
+            if is_our_process:
+                cls._processes.pop(simulation_id, None)
+                cls._action_queues.pop(simulation_id, None)
+
+                # Close log file handle
+                if simulation_id in cls._stdout_files:
+                    try:
+                        cls._stdout_files[simulation_id].close()
+                    except Exception:
+                        pass
+                    cls._stdout_files.pop(simulation_id, None)
+                if simulation_id in cls._stderr_files and cls._stderr_files[simulation_id]:
+                    try:
+                        cls._stderr_files[simulation_id].close()
+                    except Exception:
+                        pass
+                    cls._stderr_files.pop(simulation_id, None)
+
+            # Only pop monitor thread if it is current thread
+            if cls._monitor_threads.get(simulation_id) is threading.current_thread():
+                cls._monitor_threads.pop(simulation_id, None)
     
     @classmethod
     def _read_action_log(
@@ -947,13 +1026,30 @@ class SimulationRunner:
             except Exception as e:
                 logger.error(f"Failed to terminate process PID {state.process_pid}: {simulation_id}, error={e}")
 
-        cls._processes.pop(simulation_id, None)
+        # Wait for monitor thread to complete
+        monitor_thread = cls._monitor_threads.get(simulation_id)
+        if monitor_thread and monitor_thread.is_alive() and monitor_thread != threading.current_thread():
+            monitor_thread.join(timeout=5.0)
+            if not monitor_thread.is_alive() and cls._monitor_threads.get(simulation_id) is monitor_thread:
+                cls._monitor_threads.pop(simulation_id, None)
 
-        state.runner_status = RunnerStatus.STOPPED
-        state.twitter_running = False
-        state.reddit_running = False
-        state.completed_at = datetime.now().isoformat()
-        cls._save_run_state(state)
+        if cls._processes.get(simulation_id) is process:
+            cls._processes.pop(simulation_id, None)
+
+        if simulation_id in cls._stdout_files and cls._processes.get(simulation_id) is None:
+            try:
+                cls._stdout_files[simulation_id].close()
+            except Exception:
+                pass
+            cls._stdout_files.pop(simulation_id, None)
+
+        latest_state = cls.get_run_state(simulation_id) or state
+        latest_state.runner_status = RunnerStatus.STOPPED
+        latest_state.twitter_running = False
+        latest_state.reddit_running = False
+        if not latest_state.completed_at:
+            latest_state.completed_at = datetime.now().isoformat()
+        cls._save_run_state(latest_state)
 
         # Stop graph memory updater
         if cls._graph_memory_enabled.get(simulation_id, False):
@@ -1344,8 +1440,9 @@ class SimulationRunner:
         # Check if there is content to clean (avoid empty process printing useless logs)
         has_processes = bool(cls._processes)
         has_updaters = bool(cls._graph_memory_enabled)
+        has_threads = any(t and t.is_alive() for t in cls._monitor_threads.values())
         
-        if not has_processes and not has_updaters:
+        if not has_processes and not has_updaters and not has_threads:
             return  # No content to clean, return silently
         
         logger.info("Cleaning up all simulation processes...")
@@ -1363,6 +1460,16 @@ class SimulationRunner:
         for simulation_id, process in processes:
             try:
                 if process.poll() is None:  # Process still running
+                    # Mark state as STOPPED before terminating process so monitor thread won't set FAILED
+                    state = cls.get_run_state(simulation_id)
+                    if state:
+                        state.runner_status = RunnerStatus.STOPPED
+                        state.twitter_running = False
+                        state.reddit_running = False
+                        state.completed_at = datetime.now().isoformat()
+                        state.error = "Server closed, simulation terminated"
+                        cls._save_run_state(state)
+
                     logger.info(f"Terminate simulation process: {simulation_id}, pid={process.pid}")
                     
                     try:
@@ -1407,6 +1514,15 @@ class SimulationRunner:
             except Exception as e:
                 logger.error(f"Failed to clean up process: {simulation_id}, error={e}")
         
+        # Wait for all monitor threads to complete gracefully
+        for simulation_id, thread in list(cls._monitor_threads.items()):
+            if thread and thread.is_alive() and thread != threading.current_thread():
+                try:
+                    thread.join(timeout=5.0)
+                except Exception as e:
+                    logger.warning(f"Error joining monitor thread for {simulation_id}: {e}")
+        cls._monitor_threads.clear()
+
         # Clean up file handles
         for simulation_id, file_handle in list(cls._stdout_files.items()):
             try:
