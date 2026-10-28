@@ -442,6 +442,11 @@ Based on the above content, design entity types and relationship types suitable 
                     if entity["name"] != original_name:
                         logger.warning(f"Entity type name '{original_name}' auto-converted to '{entity['name']}'")
                     entity_name_map[original_name] = entity["name"]
+                else:
+                    try:
+                        hash(original_name)
+                    except TypeError:
+                        entity["name"] = ""
             if "attributes" not in entity:
                 entity["attributes"] = []
             elif isinstance(entity["attributes"], str):
@@ -457,8 +462,11 @@ Based on the above content, design entity types and relationship types suitable 
             if "examples" not in entity:
                 entity["examples"] = []
             # Ensure description doesn't exceed 100 characters
-            if len(entity.get("description", "")) > 100:
-                entity["description"] = entity["description"][:97] + "..."
+            desc = entity.get("description")
+            if not isinstance(desc, str):
+                entity["description"] = ""
+            elif len(desc) > 100:
+                entity["description"] = desc[:97] + "..."
 
         # Validate relationship types
         for edge in result["edge_types"]:
@@ -505,8 +513,11 @@ Based on the above content, design entity types and relationship types suitable 
                 for attr in edge["attributes"]
                 if (normalized := normalize_ontology_attribute(attr)) is not None
             ]
-            if len(edge.get("description", "")) > 100:
-                edge["description"] = edge["description"][:97] + "..."
+            desc = edge.get("description")
+            if not isinstance(desc, str):
+                edge["description"] = ""
+            elif len(desc) > 100:
+                edge["description"] = desc[:97] + "..."
 
         # Maximum 10 custom entity types, maximum 10 custom edge types
         MAX_ENTITY_TYPES = 10
@@ -516,12 +527,17 @@ Based on the above content, design entity types and relationship types suitable 
         seen_names = set()
         deduped = []
         for entity in result["entity_types"]:
-            name = entity.get("name", "")
-            if name and name not in seen_names:
-                seen_names.add(name)
-                deduped.append(entity)
-            elif name in seen_names:
-                logger.warning(f"Duplicate entity type '{name}' removed during validation")
+            name = entity.get("name")
+            if not name:
+                continue
+            try:
+                if name not in seen_names:
+                    seen_names.add(name)
+                    deduped.append(entity)
+                else:
+                    logger.warning(f"Duplicate entity type '{name}' removed during validation")
+            except TypeError:
+                continue
         result["entity_types"] = deduped
 
         # Fallback type definitions
@@ -546,7 +562,7 @@ Based on the above content, design entity types and relationship types suitable 
         }
 
         # Check if fallback types already exist
-        entity_names = {e["name"] for e in result["entity_types"]}
+        entity_names = {e.get("name") for e in result["entity_types"] if isinstance(e.get("name"), str)}
         has_person = "Person" in entity_names
         has_organization = "Organization" in entity_names
 
