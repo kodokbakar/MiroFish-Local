@@ -45,6 +45,7 @@ Only the orchestrator edits this file.
 | 026 | `9506e6f` | Ontology attribute normalization duplicated across graph builder and generator | refactor | adapt | low | ported | `c5c2864` | Ported and merged via branch kodokbakar/port-026; 300 tests passed. |
 | 027 | - | Issue #4: Unkillable zombie subprocesses and IPC hijacking due to invalid status check in stop_simulation | bugfix | direct | medium | ported | `1755abe` | Fixed and tested on branch kodokbakar/unkillable-zombie-subprocesses-and-ipc-hijacking; 317 tests passed. |
 | 028 | - | Issue #7: State-machine deadlock prevents single-platform simulation restart and status check | bugfix | direct | low | ported | `b51b464` | Fixed and tested on branch kodokbakar/state-machine-deadlock-prevents-single-platform; 506 tests passed. |
+| 029 | - | Issue #8: Race condition between stop_simulation/start_simulation and monitor thread corrupts state and orphans processes | bugfix | direct | medium | ported | `2617d67` | Fixed and tested on branch kodokbakar/race-condition-between-stop_simulation-start_sim; 474 tests passed. |
 
 ## Skipped (with reason)
 | Upstream commit | Reason |
