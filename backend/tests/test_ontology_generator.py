@@ -482,6 +482,120 @@ class TestOntologyGeneratorValidateAndProcess:
         processed = generator._validate_and_process(raw_result)
         assert processed["edge_types"][0]["name"] == 12345
 
+
+    def test_edge_source_targets_missing_keys(self, generator: OntologyGenerator):
+        """Edge source_targets dicts missing 'source' or 'target' keys should be preserved safely."""
+        raw_result = {
+            "entity_types": [],
+            "edge_types": [
+                {
+                    "name": "RELATION",
+                    "source_targets": [{"other_key": "val"}],
+                }
+            ],
+        }
+        processed = generator._validate_and_process(raw_result)
+        assert processed["edge_types"][0]["source_targets"] == [{"other_key": "val"}]
+
+    def test_edge_source_targets_non_string_values(self, generator: OntologyGenerator):
+        """Edge source_targets with non-string source or target values should be handled safely."""
+        raw_result = {
+            "entity_types": [{"name": "Person"}],
+            "edge_types": [
+                {
+                    "name": "RELATION",
+                    "source_targets": [
+                        {"source": 123, "target": 456},
+                        {"source": None, "target": ["invalid"]},
+                        {"source": "Person", "target": True},
+                    ],
+                }
+            ],
+        }
+        processed = generator._validate_and_process(raw_result)
+        assert processed["edge_types"][0]["source_targets"] == [
+            {"source": 123, "target": 456},
+            {"source": None, "target": ["invalid"]},
+            {"source": "Person", "target": True},
+        ]
+
+    def test_entity_missing_or_non_string_name(self, generator: OntologyGenerator):
+        """Entities lacking 'name' or with integer/boolean names should not cause crashes."""
+        raw_result = {
+            "entity_types": [
+                {"description": "missing name key"},
+                {"name": 42, "description": "integer name"},
+                {"name": True, "description": "boolean name"},
+            ],
+            "edge_types": [],
+        }
+        processed = generator._validate_and_process(raw_result)
+        names = [e["name"] for e in processed["entity_types"]]
+        assert 42 in names
+        assert True in names
+        assert "Person" in names
+        assert "Organization" in names
+
+    def test_entity_list_name(self, generator: OntologyGenerator):
+        """Entity with list name should be handled safely without TypeError."""
+        raw_result = {
+            "entity_types": [{"name": ["Tag1", "Tag2"], "description": "List name"}],
+            "edge_types": [],
+        }
+        processed = generator._validate_and_process(raw_result)
+        names = [e["name"] for e in processed["entity_types"]]
+        assert "Person" in names
+        assert "Organization" in names
+
+    def test_entity_and_edge_description_none(self, generator: OntologyGenerator):
+        """Entity and edge with description=None should not raise TypeError on len()."""
+        raw_result = {
+            "entity_types": [{"name": "Person", "description": None}],
+            "edge_types": [{"name": "FOLLOWS", "description": None}],
+        }
+        processed = generator._validate_and_process(raw_result)
+        assert len(processed["entity_types"]) >= 1
+        assert len(processed["edge_types"]) == 1
+
+
+def test_ontology_generation_end_to_end_malformed_llm_payload():
+    """OntologyGenerator.generate() end-to-end with mocked LLM returning malformed payloads."""
+    malformed_payload = {
+        "entity_types": ["InvalidString", {"name": "user_profile"}, 42, None],
+        "edge_types": [
+            {"name": 1234, "source_targets": None},
+            {"name": "follows", "source_targets": "invalid_string"},
+            {"name": "likes", "source_targets": ["Person -> Post"]},
+            {"name": "works_at", "source_targets": {"source": "user_profile", "target": "Organization"}},
+        ],
+        "analysis_summary": None,
+    }
+
+    class MockLLM:
+        def chat_json(self, **kwargs):
+            return malformed_payload
+
+    generator = OntologyGenerator(llm_client=MockLLM())
+    result = generator.generate(
+        document_texts=["Document content for simulation."],
+        simulation_requirement="Simulate user behavior.",
+    )
+
+    entity_names = [e["name"] for e in result["entity_types"]]
+    assert "UserProfile" in entity_names
+    assert "Person" in entity_names
+    assert "Organization" in entity_names
+
+    edge_names = [e["name"] for e in result["edge_types"]]
+    assert 1234 in edge_names
+    assert "FOLLOWS" in edge_names
+    assert "LIKES" in edge_names
+    assert "WORKS_AT" in edge_names
+
+    works_at_edge = next(e for e in result["edge_types"] if e["name"] == "WORKS_AT")
+    assert works_at_edge["source_targets"] == [{"source": "UserProfile", "target": "Organization"}]
+
+    assert result["analysis_summary"] == ""
 def _generator_for_test() -> OntologyGenerator:
     generator = OntologyGenerator(llm_client=object())
     generator.MAX_TEXT_LENGTH_FOR_LLM = 2000
