@@ -46,6 +46,7 @@ Only the orchestrator edits this file.
 | 027 | - | Issue #4: Unkillable zombie subprocesses and IPC hijacking due to invalid status check in stop_simulation | bugfix | direct | medium | ported | `1755abe` | Fixed and tested on branch kodokbakar/unkillable-zombie-subprocesses-and-ipc-hijacking; 317 tests passed. |
 | 028 | - | Issue #7: State-machine deadlock prevents single-platform simulation restart and status check | bugfix | direct | low | ported | `b51b464` | Fixed and tested on branch kodokbakar/state-machine-deadlock-prevents-single-platform; 506 tests passed. |
 | 029 | - | Issue #8: Race condition between stop_simulation/start_simulation and monitor thread corrupts state and orphans processes | bugfix | direct | medium | ported | `2617d67` | Fixed and tested on branch kodokbakar/race-condition-between-stop_simulation-start_sim; 474 tests passed. |
+| 030 | - | Issue #9: unhandled KeyError and AttributeError crash in ReACT loop and chat endpoint during tool call parsing | bugfix | direct | low | ported | `0f806e8` | Fixed and tested on branch kodokbakar/fix-report_agent-unhandled-keyerror-and-attribut; 499 tests passed. |
 
 ## Skipped (with reason)
 | Upstream commit | Reason |
