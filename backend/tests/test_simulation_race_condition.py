@@ -423,3 +423,255 @@ def test_concurrent_stop_and_restart_race(clean_simulation_runner):
     assert SimulationRunner._processes[sim_id] is proc2
     assert SimulationRunner.get_run_state(sim_id).runner_status == RunnerStatus.RUNNING
     assert SimulationRunner.get_run_state(sim_id).process_pid == 9502
+
+
+# ============================================================================
+# 6. Edge cases: Active log reading, dead process, cycles, monitor exceptions
+# ============================================================================
+
+def test_stop_simulation_while_monitor_actively_reading_logs(clean_simulation_runner):
+    """
+    Test stop_simulation called while monitor thread is actively executing _read_action_log.
+    Ensures that:
+    1. stop_simulation does not deadlock waiting for thread.
+    2. Monitor thread finishes read and observes STOPPING/STOPPED state.
+    3. Final state is STOPPED without being overwritten by FAILED.
+    """
+    sim_id = "sim_stop_during_read"
+    _setup_simulation_dir(clean_simulation_runner, sim_id)
+
+    proc = _create_mock_process(pid=5101, returncode=None)
+    SimulationRunner._processes[sim_id] = proc
+
+    state = SimulationRunState(
+        simulation_id=sim_id,
+        runner_status=RunnerStatus.RUNNING,
+        process_pid=5101,
+        started_at="2026-01-01T00:00:00",
+    )
+    SimulationRunner._save_run_state(state)
+
+    # Create dummy twitter actions log
+    tw_log = os.path.join(clean_simulation_runner, sim_id, "twitter", "actions.jsonl")
+    os.makedirs(os.path.dirname(tw_log), exist_ok=True)
+    with open(tw_log, "w", encoding="utf-8") as f:
+        f.write('{"round_num": 1, "agent_id": 1, "agent_name": "bot", "platform": "twitter", "action_type": "post"}\n')
+
+    read_entered = threading.Event()
+    allow_read_to_finish = threading.Event()
+    original_read = SimulationRunner._read_action_log
+
+    def synchronized_read(log_path, position, state, platform):
+        read_entered.set()
+        allow_read_to_finish.wait(timeout=2.0)
+        return original_read(log_path, position, state, platform)
+
+    def fake_terminate(process, simulation_id, timeout=10):
+        proc.poll.return_value = -15
+        proc.returncode = -15
+        allow_read_to_finish.set()
+
+    monitor_thread = threading.Thread(
+        target=SimulationRunner._monitor_simulation,
+        args=(sim_id,),
+        daemon=True,
+    )
+    SimulationRunner._monitor_threads[sim_id] = monitor_thread
+
+    with patch.object(SimulationRunner, "_read_action_log", side_effect=synchronized_read), \
+         patch.object(SimulationRunner, "_terminate_process", side_effect=fake_terminate):
+        monitor_thread.start()
+        assert read_entered.wait(timeout=2.0), "Monitor thread did not enter _read_action_log"
+        res = SimulationRunner.stop_simulation(sim_id)
+
+    assert res.runner_status == RunnerStatus.STOPPED
+    assert not monitor_thread.is_alive()
+    assert sim_id not in SimulationRunner._monitor_threads
+    saved_state = SimulationRunner.get_run_state(sim_id)
+    assert saved_state.runner_status == RunnerStatus.STOPPED
+    assert saved_state.completed_at is not None
+
+
+def test_stop_simulation_when_process_already_dead_poll_not_none(clean_simulation_runner):
+    """
+    Test stop_simulation when the underlying process has already terminated (poll() is not None),
+    but the state is still marked RUNNING.
+    Should transition to STOPPED cleanly without attempting to terminate a dead process.
+    """
+    sim_id = "sim_dead_process"
+    _setup_simulation_dir(clean_simulation_runner, sim_id)
+
+    # Process is already dead (exit code 1)
+    proc = _create_mock_process(pid=5201, returncode=1)
+    SimulationRunner._processes[sim_id] = proc
+
+    state = SimulationRunState(
+        simulation_id=sim_id,
+        runner_status=RunnerStatus.RUNNING,
+        process_pid=5201,
+        started_at="2026-01-01T00:00:00",
+    )
+    SimulationRunner._save_run_state(state)
+
+    mock_stdout = MagicMock()
+    SimulationRunner._stdout_files[sim_id] = mock_stdout
+
+    with patch.object(SimulationRunner, "_terminate_process") as mock_term:
+        res = SimulationRunner.stop_simulation(sim_id)
+
+    # Process was already dead, _terminate_process should NOT be called
+    mock_term.assert_not_called()
+    assert res.runner_status == RunnerStatus.STOPPED
+    assert res.completed_at is not None
+    assert sim_id not in SimulationRunner._processes
+    assert sim_id not in SimulationRunner._stdout_files
+    mock_stdout.close.assert_called_once()
+
+    saved_state = SimulationRunner.get_run_state(sim_id)
+    assert saved_state.runner_status == RunnerStatus.STOPPED
+
+
+def test_stop_simulation_when_already_stopped_raises_error(clean_simulation_runner):
+    """
+    Test stop_simulation when process is dead and status is already STOPPED.
+    Must raise ValueError indicating simulation is not running.
+    """
+    sim_id = "sim_already_stopped"
+    _setup_simulation_dir(clean_simulation_runner, sim_id)
+
+    state = SimulationRunState(
+        simulation_id=sim_id,
+        runner_status=RunnerStatus.STOPPED,
+        process_pid=5202,
+    )
+    SimulationRunner._save_run_state(state)
+
+    with pytest.raises(ValueError, match="Simulation not running"):
+        SimulationRunner.stop_simulation(sim_id)
+
+
+def test_repeated_fast_stop_start_cycles_no_thread_or_fd_leaks(clean_simulation_runner):
+    """
+    Verify that repeated rapid stop/start cycles:
+    1. Do not leak monitor threads (each thread is joined and cleaned up).
+    2. Do not leak stdout file handles (each file is closed and popped).
+    3. Leaves runner state clean with no residual processes or threads.
+    """
+    sim_id = "sim_leak_check"
+    _setup_simulation_dir(clean_simulation_runner, sim_id)
+
+    threads = []
+    log_files = []
+    orig_sleep = time.sleep
+
+    def short_sleep(seconds):
+        orig_sleep(0.01)
+
+    with patch("time.sleep", side_effect=short_sleep):
+        for i in range(5):
+            pid = 9100 + i
+            proc = _create_mock_process(pid=pid, returncode=None)
+
+            def terminate_proc(p, sid, timeout=10, cur_proc=proc):
+                cur_proc.poll.return_value = -15
+                cur_proc.returncode = -15
+
+            # Start simulation
+            with patch.object(SimulationRunner, "is_process_alive", return_value=False), \
+                 patch("subprocess.Popen", return_value=proc):
+                state = SimulationRunner.start_simulation(sim_id, platform="twitter")
+
+            assert state.runner_status == RunnerStatus.RUNNING
+            assert state.process_pid == pid
+            cur_thread = SimulationRunner._monitor_threads.get(sim_id)
+            assert cur_thread is not None
+            threads.append(cur_thread)
+
+            cur_file = SimulationRunner._stdout_files.get(sim_id)
+            assert cur_file is not None
+            log_files.append(cur_file)
+
+            # Stop simulation
+            with patch.object(SimulationRunner, "_terminate_process", side_effect=terminate_proc):
+                stop_state = SimulationRunner.stop_simulation(sim_id)
+
+            assert stop_state.runner_status == RunnerStatus.STOPPED
+            assert sim_id not in SimulationRunner._monitor_threads
+            assert sim_id not in SimulationRunner._processes
+            assert sim_id not in SimulationRunner._stdout_files
+
+    # Verification of no leaks
+    assert len(SimulationRunner._monitor_threads) == 0
+    assert len(SimulationRunner._processes) == 0
+    assert len(SimulationRunner._stdout_files) == 0
+
+    # Ensure every started thread has actually exited
+    for t in threads:
+        assert not t.is_alive(), "Monitor thread leaked: still alive"
+
+    # Ensure every opened stdout file handle is closed
+    for f in log_files:
+        assert f.closed, "Stdout file handle leaked: still open"
+
+
+def test_monitor_exception_does_not_wipe_replaced_process(clean_simulation_runner):
+    """
+    Verify that if a monitor thread crashes with an unhandled exception after a new process
+    has been started to replace it:
+    1. The exception does NOT overwrite the new process's run_state with FAILED.
+    2. The finally block does NOT pop the new process from _processes.
+    3. The finally block does NOT close or pop the new process's stdout file handle.
+    4. The finally block does NOT pop the new process's action queue or monitor thread.
+    """
+    sim_id = "sim_exception_replacement"
+    _setup_simulation_dir(clean_simulation_runner, sim_id)
+
+    proc1 = _create_mock_process(pid=8201, returncode=None)
+    proc2 = _create_mock_process(pid=8202, returncode=None)
+
+    mock_stdout2 = MagicMock()
+    mock_queue2 = MagicMock()
+    thread2 = MagicMock()
+
+    SimulationRunner._processes[sim_id] = proc1
+    state1 = SimulationRunState(
+        simulation_id=sim_id,
+        runner_status=RunnerStatus.RUNNING,
+        process_pid=8201,
+    )
+    SimulationRunner._save_run_state(state1)
+
+    # Dummy log file so read_action_log gets called
+    tw_log = os.path.join(clean_simulation_runner, sim_id, "twitter", "actions.jsonl")
+    os.makedirs(os.path.dirname(tw_log), exist_ok=True)
+    with open(tw_log, "w", encoding="utf-8") as f:
+        f.write('{"sample": "data"}\n')
+
+    # When monitor 1 calls _read_action_log, replace process with Process 2 and raise exception
+    def crash_and_replace(*args, **kwargs):
+        SimulationRunner._processes[sim_id] = proc2
+        SimulationRunner._stdout_files[sim_id] = mock_stdout2
+        SimulationRunner._action_queues[sim_id] = mock_queue2
+        SimulationRunner._monitor_threads[sim_id] = thread2
+        state2 = SimulationRunState(
+            simulation_id=sim_id,
+            runner_status=RunnerStatus.RUNNING,
+            process_pid=8202,
+        )
+        SimulationRunner._save_run_state(state2)
+        raise RuntimeError("Simulated monitor crash during action log processing")
+
+    with patch.object(SimulationRunner, "_read_action_log", side_effect=crash_and_replace):
+        SimulationRunner._monitor_simulation(sim_id)
+
+    # Process 2 must remain completely intact
+    assert SimulationRunner._processes.get(sim_id) is proc2
+    assert SimulationRunner._stdout_files.get(sim_id) is mock_stdout2
+    mock_stdout2.close.assert_not_called()
+    assert SimulationRunner._action_queues.get(sim_id) is mock_queue2
+    assert SimulationRunner._monitor_threads.get(sim_id) is thread2
+
+    # State must NOT be FAILED from process 1
+    final_state = SimulationRunner.get_run_state(sim_id)
+    assert final_state.runner_status == RunnerStatus.RUNNING
+    assert final_state.process_pid == 8202
