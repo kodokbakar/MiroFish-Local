@@ -126,6 +126,47 @@ class TestIsValidToolCall:
         for name in ReportAgent.VALID_TOOL_NAMES:
             assert agent._is_valid_tool_call({"name": name, "parameters": {}}) is True
 
+    def test_additional_non_dict_and_whitespace_names_return_false(self):
+        agent = _make_test_agent()
+        # Non-dict inputs (floats, tuples, sets, empty list)
+        assert agent._is_valid_tool_call(3.14) is False
+        assert agent._is_valid_tool_call(("quick_search",)) is False
+        assert agent._is_valid_tool_call({"quick_search"}) is False
+        assert agent._is_valid_tool_call([]) is False
+        # Empty dict
+        assert agent._is_valid_tool_call({}) is False
+        # Whitespace and invalid tool names
+        assert agent._is_valid_tool_call({"name": "   "}) is False
+        assert agent._is_valid_tool_call({"name": "\t\n"}) is False
+        assert agent._is_valid_tool_call({"name": ""}) is False
+        assert agent._is_valid_tool_call({"name": " quick_search "}) is False
+        assert agent._is_valid_tool_call({"tool": "   "}) is False
+        assert agent._is_valid_tool_call({"name": 123}) is False
+        assert agent._is_valid_tool_call({"name": True}) is False
+
+    def test_normalizes_primitive_and_collection_params_to_dict(self):
+        agent = _make_test_agent()
+        for bad_param in [123, 3.14, True, False, [1, 2], (3, 4), "string_params"]:
+            data = {"name": "quick_search", "parameters": bad_param}
+            assert agent._is_valid_tool_call(data) is True
+            assert data["parameters"] == {}
+
+            data_legacy = {"tool": "quick_search", "params": bad_param}
+            assert agent._is_valid_tool_call(data_legacy) is True
+            assert data_legacy["parameters"] == {}
+
+    def test_params_and_parameters_mixed_types(self):
+        agent = _make_test_agent()
+        # parameters invalid, params valid dict -> params preserved
+        data1 = {"name": "quick_search", "parameters": "bad", "params": {"query": "valid"}}
+        assert agent._is_valid_tool_call(data1) is True
+        assert data1["parameters"] == {"query": "valid"}
+
+        # both invalid -> normalized to {}
+        data2 = {"name": "quick_search", "parameters": "bad", "params": [1, 2]}
+        assert agent._is_valid_tool_call(data2) is True
+        assert data2["parameters"] == {}
+
 
 # ============================================================================
 # 2. Unit tests for ReportAgent._parse_tool_calls
@@ -201,6 +242,47 @@ class TestParseToolCalls:
         assert calls[0]["name"] == "quick_search"
         assert calls[0]["parameters"] == {"query": "last"}
 
+    def test_parse_xml_malformed_json_ignored(self):
+        agent = _make_test_agent()
+        response = (
+            '<tool_call>{name: "quick_search", unclosed</tool_call>\n'
+            '<tool_call><not_json></tool_call>\n'
+            '<tool_call>{"incomplete": </tool_call>'
+        )
+        calls = agent._parse_tool_calls(response)
+        assert calls == []
+
+    def test_parse_xml_primitive_payloads_ignored(self):
+        agent = _make_test_agent()
+        response = (
+            '<tool_call>12345</tool_call>\n'
+            '<tool_call>"just a plain string"</tool_call>\n'
+            '<tool_call>true</tool_call>\n'
+            '<tool_call>null</tool_call>'
+        )
+        calls = agent._parse_tool_calls(response)
+        assert calls == []
+
+    def test_parse_xml_mixed_valid_and_invalid_tool_calls(self):
+        agent = _make_test_agent()
+        response = (
+            'Thinking about the response...\n'
+            '<tool_call>{invalid json</tool_call>\n'
+            '<tool_call>[1, 2, 3]</tool_call>\n'
+            '<tool_call>999</tool_call>\n'
+            '<tool_call>{"thought": "exploring graph"}</tool_call>\n'
+            '<tool_call>{"name": "quick_search", "parameters": {"query": "campus events"}}</tool_call>\n'
+            '<tool_call>{"name": "unknown_tool", "parameters": {}}</tool_call>\n'
+            '<tool_call>{"tool": "panorama_search", "params": {"query": "student reactions"}}</tool_call>\n'
+            '<tool_call>"trailing string"</tool_call>'
+        )
+        calls = agent._parse_tool_calls(response)
+        assert len(calls) == 2
+        assert calls[0]["name"] == "quick_search"
+        assert calls[0]["parameters"] == {"query": "campus events"}
+        assert calls[1]["name"] == "panorama_search"
+        assert calls[1]["parameters"] == {"query": "student reactions"}
+
 
 # ============================================================================
 # 3. Unit tests for ReportAgent._execute_tool
@@ -238,6 +320,69 @@ class TestExecuteTool:
             query="test",
             include_expired=False,
         )
+
+    def test_execute_tool_all_tools_with_none_and_non_dict_params(self):
+        agent = _make_test_agent()
+        for tool_name in ["insight_forge", "panorama_search", "quick_search", "interview_agents"]:
+            for bad_param in [None, 42, "invalid", [1, 2], True]:
+                result = agent._execute_tool(tool_name, bad_param)
+                assert result == "Mock graph result"
+
+    def test_execute_tool_parameter_type_coercion_and_defaults(self):
+        agent = _make_test_agent()
+
+        # quick_search defaults and string limit coercion
+        agent._execute_tool("quick_search", {})
+        agent.graph_tools.quick_search.assert_called_with(
+            graph_id="test_graph",
+            query="",
+            limit=10,
+        )
+        agent._execute_tool("quick_search", {"query": "q", "limit": "5"})
+        agent.graph_tools.quick_search.assert_called_with(
+            graph_id="test_graph",
+            query="q",
+            limit=5,
+        )
+
+        # panorama_search defaults and boolean string coercion
+        agent._execute_tool("panorama_search", {})
+        agent.graph_tools.panorama_search.assert_called_with(
+            graph_id="test_graph",
+            query="",
+            include_expired=True,
+        )
+        agent._execute_tool("panorama_search", {"include_expired": "false"})
+        agent.graph_tools.panorama_search.assert_called_with(
+            graph_id="test_graph",
+            query="",
+            include_expired=False,
+        )
+
+        # interview_agents defaults and topic fallback
+        agent._execute_tool("interview_agents", {})
+        agent.graph_tools.interview_agents.assert_called_with(
+            simulation_id="test_sim",
+            interview_requirement="",
+            simulation_requirement="Test requirements",
+            max_agents=5,
+        )
+        agent._execute_tool("interview_agents", {"query": "topic_fallback", "max_agents": "8"})
+        agent.graph_tools.interview_agents.assert_called_with(
+            simulation_id="test_sim",
+            interview_requirement="topic_fallback",
+            simulation_requirement="Test requirements",
+            max_agents=8,
+        )
+
+    def test_execute_tool_unknown_tool_and_exception(self):
+        agent = _make_test_agent()
+        unknown_res = agent._execute_tool("nonexistent_tool", {})
+        assert "Unknown tool: nonexistent_tool" in unknown_res
+
+        agent.graph_tools.quick_search.side_effect = RuntimeError("Database connection down")
+        fail_res = agent._execute_tool("quick_search", {"query": "fail"})
+        assert "Tool execution failed: Database connection down" in fail_res
 
 
 # ============================================================================
@@ -306,6 +451,36 @@ class TestGenerateSectionReactParsing:
         content = agent._generate_section_react(section, outline, previous_sections=[], section_index=0)
         assert content == "Section finished."
 
+    def test_react_loop_recovers_when_response_contains_only_invalid_tool_calls(self):
+        """When LLM returns only invalid tool calls, loop continues and completes when valid calls arrive."""
+        mock_llm = MagicMock()
+        agent = _make_test_agent(mock_llm=mock_llm)
+
+        # Round 1: only invalid tool call blocks (malformed JSON + thought + non-dict)
+        round1 = (
+            "Thinking about approach...\n"
+            "<tool_call>{bad json</tool_call>\n"
+            '<tool_call>{"thought": "planning next step"}</tool_call>\n'
+            "<tool_call>123</tool_call>"
+        )
+        # Round 2: valid tool call
+        round2 = '<tool_call>{"name": "quick_search", "parameters": {"query": "student query"}}</tool_call>'
+        # Round 3: another valid tool call
+        round3 = '<tool_call>{"name": "panorama_search", "parameters": {"query": "reactions"}}</tool_call>'
+        # Round 4: another valid tool call to meet default min_tool_calls
+        round4 = '<tool_call>{"name": "insight_forge", "parameters": {"query": "forge"}}</tool_call>'
+        # Round 5: Final Answer
+        round5 = "Final Answer:\nSection content recovered and completed successfully."
+
+        mock_llm.chat.side_effect = [round1, round2, round3, round4, round5]
+
+        section = ReportSection(title="Recovery Section", content="")
+        outline = ReportOutline(title="Report", summary="Summary", sections=[section])
+
+        content = agent._generate_section_react(section, outline, previous_sections=[], section_index=0)
+        assert content == "Section content recovered and completed successfully."
+        assert mock_llm.chat.call_count == 5
+
 
 # ============================================================================
 # 5. Integration tests for chat endpoint
@@ -366,5 +541,41 @@ class TestChatToolCallParsing:
 
         result = agent.chat("Show graph data")
         assert result["response"] == "Summary from graph."
+        assert len(result["tool_calls"]) == 1
+        assert result["sources"] == [""]
+
+    def test_chat_all_tool_calls_invalid_falls_back_to_direct_reply(self):
+        """When chat LLM returns only invalid tool calls, tags are stripped and direct reply is returned."""
+        mock_llm = MagicMock()
+        agent = _make_test_agent(mock_llm=mock_llm)
+
+        round1 = (
+            "Here is the synthesized overview.\n"
+            "<tool_call>{malformed json: true</tool_call>\n"
+            "<tool_call>42</tool_call>\n"
+            '<tool_call>{"name": "non_existent_tool", "parameters": {}}</tool_call>\n'
+            "Everything looks stable."
+        )
+        mock_llm.chat.side_effect = [round1]
+
+        result = agent.chat("What is the current status?")
+        assert "Here is the synthesized overview." in result["response"]
+        assert "Everything looks stable." in result["response"]
+        assert "<tool_call>" not in result["response"]
+        assert result["tool_calls"] == []
+        assert result["sources"] == []
+
+    def test_chat_handles_non_dict_parameters_during_execution(self):
+        """chat safely executes when parameters is non-dict string or list."""
+        mock_llm = MagicMock()
+        agent = _make_test_agent(mock_llm=mock_llm)
+
+        round1 = '<tool_call>{"name": "quick_search", "parameters": "non_dict_param"}</tool_call>'
+        round2 = "The quick search succeeded despite string param."
+
+        mock_llm.chat.side_effect = [round1, round2]
+
+        result = agent.chat("Check status")
+        assert result["response"] == "The quick search succeeded despite string param."
         assert len(result["tool_calls"]) == 1
         assert result["sources"] == [""]
