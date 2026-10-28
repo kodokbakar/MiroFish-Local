@@ -44,7 +44,7 @@ Only the orchestrator edits this file.
 | 025 | `9f80ad6` | Field normalization scattered across profile generation rather than centralized | refactor | direct | low | ported | `64dbd49` | Ported and merged via branch kodokbakar/port-025; 290 tests passed. |
 | 026 | `9506e6f` | Ontology attribute normalization duplicated across graph builder and generator | refactor | adapt | low | ported | `c5c2864` | Ported and merged via branch kodokbakar/port-026; 300 tests passed. |
 | 027 | - | Issue #4: Unkillable zombie subprocesses and IPC hijacking due to invalid status check in stop_simulation | bugfix | direct | medium | ported | `1755abe` | Fixed and tested on branch kodokbakar/unkillable-zombie-subprocesses-and-ipc-hijacking; 317 tests passed. |
-| 028 | - | Issue #10: Unhandled TypeError and AttributeError on malformed source_targets and entity_types in ontology validation | bugfix | direct | low | in-progress | kodokbakar/unhandled-typeerror-and-attributeerror-on-malfor | In progress on branch kodokbakar/unhandled-typeerror-and-attributeerror-on-malfor |
+| 028 | - | Issue #10: Unhandled TypeError and AttributeError on malformed source_targets and entity_types in ontology validation | bugfix | direct | low | ported | `59cae4c` | Fixed and tested on branch kodokbakar/unhandled-typeerror-and-attributeerror-on-malfor; 476 tests passed. |
 
 ## Skipped (with reason)
 | Upstream commit | Reason |
