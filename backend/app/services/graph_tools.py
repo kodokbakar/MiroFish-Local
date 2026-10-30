@@ -649,6 +649,27 @@ class GraphToolsService:
             logger.error(f"Failed to get node details: {str(e)}")
             return None
 
+    def get_nodes_detail(self, node_uuids: List[str]) -> List[NodeInfo]:
+        """Get detailed information about multiple nodes in a single batch query."""
+        if not node_uuids:
+            return []
+
+        try:
+            raw_nodes = self.storage.get_nodes_by_uuids(node_uuids)
+            result = []
+            for node in raw_nodes:
+                result.append(NodeInfo(
+                    uuid=node.get("uuid", ""),
+                    name=node.get("name", ""),
+                    labels=node.get("labels", []),
+                    summary=node.get("summary", ""),
+                    attributes=node.get("attributes", {})
+                ))
+            return result
+        except Exception as e:
+            logger.error(f"Failed to get batch node details: {str(e)}")
+            return []
+
     def get_node_edges(self, graph_id: str, node_uuid: str) -> List[EdgeInfo]:
         """
         Get all edges related to a node
@@ -892,17 +913,16 @@ class GraphToolsService:
                 if target_uuid:
                     entity_uuids.add(target_uuid)
 
-        # Get related entity details
+        # Get related entity details in a single batch query
         entity_insights = []
         node_map = {}
 
-        for uuid in list(entity_uuids):
-            if not uuid:
-                continue
+        valid_uuids = [u for u in entity_uuids if u]
+        if valid_uuids:
             try:
-                node = self.get_node_detail(uuid)
-                if node:
-                    node_map[uuid] = node
+                nodes = self.get_nodes_detail(valid_uuids)
+                for node in nodes:
+                    node_map[node.uuid] = node
                     entity_type = next((la for la in node.labels if la not in ["Entity", "Node"]), "Entity")
 
                     related_facts = [
@@ -918,8 +938,7 @@ class GraphToolsService:
                         "related_facts": related_facts
                     })
             except Exception as e:
-                logger.debug(f"Failed to get node {uuid}: {e}")
-                continue
+                logger.debug(f"Failed to get batch node details: {e}")
 
         result.entity_insights = entity_insights
         result.total_entities = len(entity_insights)

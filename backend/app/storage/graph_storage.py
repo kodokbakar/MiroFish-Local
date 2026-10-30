@@ -33,10 +33,16 @@ class GraphStorage(ABC):
     # --- Add data ---
 
     @abstractmethod
-    def add_text(self, graph_id: str, text: str) -> str:
+    def add_text(
+        self,
+        graph_id: str,
+        text: str,
+        ontology: Optional[Dict[str, Any]] = None,
+    ) -> str:
         """
         Process text: NER/RE → create nodes/edges → return episode_id.
         This is synchronous (unlike Zep Cloud's async episodes).
+        Optional ontology avoids redundant DB lookup during batch operations.
         """
 
     @abstractmethod
@@ -46,6 +52,7 @@ class GraphStorage(ABC):
         chunks: List[str],
         batch_size: int = 3,
         progress_callback: Optional[Callable] = None,
+        ontology: Optional[Dict[str, Any]] = None,
     ) -> List[str]:
         """Batch-add text chunks. Returns list of episode_ids."""
 
@@ -71,6 +78,10 @@ class GraphStorage(ABC):
     @abstractmethod
     def get_node(self, uuid: str) -> Optional[Dict[str, Any]]:
         """Get a single node by UUID."""
+
+    @abstractmethod
+    def get_nodes_by_uuids(self, uuids: List[str]) -> List[Dict[str, Any]]:
+        """Get multiple nodes by their UUIDs in a single batch query."""
 
     @abstractmethod
     def get_node_edges(self, node_uuid: str) -> List[Dict[str, Any]]:

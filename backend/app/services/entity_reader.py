@@ -289,16 +289,16 @@ class EntityReader:
                     })
                     related_node_uuids.add(edge["source_node_uuid"])
 
-            # Fetch related nodes individually (avoids loading ALL nodes)
+            # Fetch related nodes via batch retrieval (avoids N+1 query loop)
             related_nodes = []
-            for related_uuid in related_node_uuids:
-                related_node = self.storage.get_node(related_uuid)
-                if related_node:
+            if related_node_uuids:
+                raw_nodes = self.storage.get_nodes_by_uuids(list(related_node_uuids))
+                for r_node in raw_nodes:
                     related_nodes.append({
-                        "uuid": related_node["uuid"],
-                        "name": related_node["name"],
-                        "labels": related_node.get("labels", []),
-                        "summary": related_node.get("summary", ""),
+                        "uuid": r_node["uuid"],
+                        "name": r_node["name"],
+                        "labels": r_node.get("labels", []),
+                        "summary": r_node.get("summary", ""),
                     })
 
             return EntityNode(

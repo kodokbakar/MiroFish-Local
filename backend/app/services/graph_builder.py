@@ -139,7 +139,8 @@ class GraphBuilderService:
                     task_id,
                     progress=20 + int(prog * 0.6),  # 20-80%
                     message=msg
-                )
+                ),
+                ontology=ontology
             )
 
             # 5. Wait for processing (no-op for Neo4j — already synchronous)
@@ -203,7 +204,8 @@ class GraphBuilderService:
         graph_id: str,
         chunks: List[str],
         batch_size: int = 3,
-        progress_callback: Optional[Callable] = None
+        progress_callback: Optional[Callable] = None,
+        ontology: Optional[Dict[str, Any]] = None,
     ) -> List[str]:
         """Add text in batches to graph, return uuid list of all episodes"""
         episode_uuids = []
@@ -232,7 +234,7 @@ class GraphBuilderService:
                 )
                 t0 = time.time()
                 try:
-                    episode_id = self.storage.add_text(graph_id, chunk)
+                    episode_id = self.storage.add_text(graph_id, chunk, ontology=ontology)
                     episode_uuids.append(episode_id)
                     elapsed = time.time() - t0
                     logger.info(
