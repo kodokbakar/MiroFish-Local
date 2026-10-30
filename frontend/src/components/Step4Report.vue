@@ -66,7 +66,7 @@
         </div>
 
         <!-- Waiting State -->
-        <div v-if="!reportOutline" class="waiting-placeholder">
+        <div v-if="!reportOutline && !hasError" class="waiting-placeholder">
           <div class="waiting-animation">
             <div class="waiting-ring"></div>
             <div class="waiting-ring"></div>
@@ -83,6 +83,11 @@
           <span class="header-index mono">{{ activeStep.noLabel }}</span>
           <span class="header-title">{{ activeStep.title }}</span>
           <span class="header-meta mono" v-if="activeStep.meta">{{ activeStep.meta }}</span>
+        </div>
+
+        <div v-if="hasError" class="report-error" role="alert">
+          <strong>Report generation failed</strong>
+          <span>{{ errorMessage }}</span>
         </div>
 
         <!-- Workflow Overview (flat, status-based palette) -->
@@ -423,6 +428,8 @@ const expandedContent = ref(new Set())
 const expandedLogs = ref(new Set())
 const collapsedSections = ref(new Set())
 const isComplete = ref(false)
+const hasError = ref(false)
+const errorMessage = ref('')
 const startTime = ref(null)
 const leftPanel = ref(null)
 const rightPanel = ref(null)
@@ -1702,12 +1709,14 @@ const QuickSearchDisplay = {
 
 // Computed
 const statusClass = computed(() => {
+  if (hasError.value) return 'failed'
   if (isComplete.value) return 'completed'
   if (agentLogs.value.length > 0) return 'processing'
   return 'pending'
 })
 
 const statusText = computed(() => {
+  if (hasError.value) return 'Failed'
   if (isComplete.value) return 'Completed'
   if (agentLogs.value.length > 0) return 'Generating...'
   return 'Waiting'
@@ -2000,7 +2009,8 @@ const getActionLabel = (action) => {
     'tool_call': 'Tool Call',
     'tool_result': 'Tool Result',
     'llm_response': 'LLM Response',
-    'report_complete': 'Complete'
+    'report_complete': 'Complete',
+    'error': 'Report Failed'
   }
   return labels[action] || action
 }
@@ -2047,6 +2057,14 @@ const fetchAgentLog = async () => {
             }
           }
           
+          if (log.action === 'error') {
+            hasError.value = true
+            errorMessage.value = log.details?.message || log.details?.error || 'Report generation failed'
+            currentSectionIndex.value = null
+            emit('update-status', 'failed')
+            stopPolling()
+          }
+
           if (log.action === 'report_complete') {
             isComplete.value = true
             currentSectionIndex.value = null  // Ensure loading state is cleared
@@ -2195,6 +2213,8 @@ watch(() => props.reportId, (newId) => {
     expandedLogs.value = new Set()
     collapsedSections.value = new Set()
     isComplete.value = false
+    hasError.value = false
+    errorMessage.value = ''
     startTime.value = null
     
     startPolling()
@@ -2203,6 +2223,29 @@ watch(() => props.reportId, (newId) => {
 </script>
 
 <style scoped>
+.report-error {
+  margin: 16px;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: #991B1B;
+  background: #FEF2F2;
+  border: 1px solid #FECACA;
+  border-radius: 8px;
+}
+
+.report-error strong {
+  font-size: 13px;
+}
+
+.report-error span {
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .report-panel {
   height: 100%;
   display: flex;
