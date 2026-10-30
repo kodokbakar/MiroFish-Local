@@ -48,7 +48,7 @@ Only the orchestrator edits this file.
 | 029 | - | Issue #8: Race condition between stop_simulation/start_simulation and monitor thread corrupts state and orphans processes | bugfix | direct | medium | ported | `2617d67` | Fixed and tested on branch kodokbakar/race-condition-between-stop_simulation-start_sim; 474 tests passed. |
 | 030 | - | Issue #9: unhandled KeyError and AttributeError crash in ReACT loop and chat endpoint during tool call parsing | bugfix | direct | low | ported | `0f806e8` | Fixed and tested on branch kodokbakar/fix-report_agent-unhandled-keyerror-and-attribut; 499 tests passed. |
 | 031 | - | Issue #10: Unhandled TypeError and AttributeError on malformed source_targets and entity_types in ontology validation | bugfix | direct | low | ported | `59cae4c` | Fixed and tested on branch kodokbakar/unhandled-typeerror-and-attributeerror-on-malfor; 476 tests passed. |
-| 032 | - | Issue #11: batch Cypher UNWIND transactions and index entity lookups in graph ingestion pipeline | perf | adapt | medium | in-progress | `worktree-issue-11` | Batched UNWIND transactions, schema composite/relation indexes, batch node retrieval API, ontology caching; 590 tests passed. |
+| 032 | - | Issue #11: batch Cypher UNWIND transactions and index entity lookups in graph ingestion pipeline | perf | adapt | medium | in-progress | `kodokbakar/batch-cypher-unwind-transactions-and-index-entity-lookups` | Batched UNWIND transactions, schema composite/relation indexes, batch node retrieval API, ontology caching, migration script; 594 tests passed. |
 
 ## Skipped (with reason)
 | Upstream commit | Reason |
