@@ -63,6 +63,11 @@ CREATE FULLTEXT INDEX fact_fulltext IF NOT EXISTS
 FOR ()-[r:RELATION]-() ON EACH [r.fact, r.name]
 """
 
+# Query to inspect index population status
+CHECK_INDEXES_QUERY = """
+SHOW INDEXES YIELD name, state, populationPercent, type
+"""
+
 # All schema queries to run on startup
 ALL_SCHEMA_QUERIES = [
     CREATE_GRAPH_UUID_CONSTRAINT,

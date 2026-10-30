@@ -72,13 +72,57 @@ class Neo4jStorage(GraphStorage):
         self._driver.close()
 
     def _ensure_schema(self):
-        """Create indexes and constraints if they don't exist."""
+        """Create indexes and constraints if they don't exist and wait for online status."""
         with self._driver.session() as session:
             for query in neo4j_schema.ALL_SCHEMA_QUERIES:
                 try:
                     session.run(query)
                 except Exception as e:
                     logger.warning(f"Schema query warning (may already exist): {e}")
+
+        try:
+            self.wait_for_indexes_online(timeout_sec=5.0)
+        except Exception as e:
+            logger.debug(f"Index wait check failed or skipped: {e}")
+
+    def wait_for_indexes_online(self, timeout_sec: float = 10.0, poll_interval: float = 0.5) -> bool:
+        """
+        Wait for all schema indexes to transition from POPULATING to ONLINE.
+        Safely handles large databases where index population occurs asynchronously.
+        Returns True if all indexes are ONLINE, False if timeout reached.
+        """
+        start_time = time.time()
+        while time.time() - start_time < timeout_sec:
+            try:
+                with self._driver.session() as session:
+                    res = session.run("SHOW INDEXES YIELD name, state, populationPercent")
+                    records = list(res)
+                    if not records:
+                        return True
+                    populating = [
+                        r["name"] for r in records
+                        if r.get("state") == "POPULATING"
+                    ]
+                    failed = [
+                        r["name"] for r in records
+                        if r.get("state") == "FAILED"
+                    ]
+                    if failed:
+                        logger.error(f"Neo4j indexes in FAILED state: {failed}")
+                    if not populating:
+                        logger.info("All Neo4j indexes are ONLINE.")
+                        return True
+                    logger.info(f"Waiting for indexes to populate: {populating}...")
+            except Exception as e:
+                logger.debug(f"SHOW INDEXES query not supported or failed: {e}")
+                return True
+            time.sleep(poll_interval)
+
+        logger.warning(
+            f"Timeout ({timeout_sec}s) waiting for indexes to become ONLINE. "
+            "They will continue populating in the background."
+        )
+        return False
 
     # ----------------------------------------------------------------
     # Retry wrapper

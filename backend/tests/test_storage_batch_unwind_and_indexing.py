@@ -55,6 +55,77 @@ class TestStorageBatchUnwindAndIndexing(unittest.TestCase):
 
         self.assertIn(neo4j_schema.CREATE_ENTITY_GRAPH_NAME_INDEX, neo4j_schema.ALL_SCHEMA_QUERIES)
         self.assertIn(neo4j_schema.CREATE_RELATION_GRAPH_ID_INDEX, neo4j_schema.ALL_SCHEMA_QUERIES)
+        self.assertIn("SHOW INDEXES", neo4j_schema.CHECK_INDEXES_QUERY)
+
+    def test_wait_for_indexes_online_all_online(self):
+        """Verify wait_for_indexes_online returns True when all indexes are ONLINE."""
+        mock_driver = MagicMock()
+        mock_session = MagicMock()
+        mock_driver.session.return_value.__enter__.return_value = mock_session
+        mock_session.run.return_value = [
+            {"name": "entity_graph_name", "state": "ONLINE", "populationPercent": 100.0},
+            {"name": "relation_graph_id", "state": "ONLINE", "populationPercent": 100.0},
+        ]
+
+        storage = Neo4jStorage.__new__(Neo4jStorage)
+        storage._driver = mock_driver
+
+        res = storage.wait_for_indexes_online(timeout_sec=2.0)
+        self.assertTrue(res)
+
+    def test_wait_for_indexes_online_recovers_from_populating(self):
+        """Verify wait_for_indexes_online polls until POPULATING transitions to ONLINE."""
+        mock_driver = MagicMock()
+        mock_session = MagicMock()
+        mock_driver.session.return_value.__enter__.return_value = mock_session
+
+        # Return POPULATING first, then ONLINE
+        mock_session.run.side_effect = [
+            [{"name": "entity_graph_name", "state": "POPULATING", "populationPercent": 50.0}],
+            [{"name": "entity_graph_name", "state": "ONLINE", "populationPercent": 100.0}],
+        ]
+
+        storage = Neo4jStorage.__new__(Neo4jStorage)
+        storage._driver = mock_driver
+
+        res = storage.wait_for_indexes_online(timeout_sec=2.0, poll_interval=0.01)
+        self.assertTrue(res)
+
+    def test_wait_for_indexes_online_graceful_timeout(self):
+        """Verify wait_for_indexes_online gracefully logs warning and returns False on timeout."""
+        mock_driver = MagicMock()
+        mock_session = MagicMock()
+        mock_driver.session.return_value.__enter__.return_value = mock_session
+        mock_session.run.return_value = [
+            {"name": "large_entity_index", "state": "POPULATING", "populationPercent": 10.0}
+        ]
+
+        storage = Neo4jStorage.__new__(Neo4jStorage)
+        storage._driver = mock_driver
+
+        res = storage.wait_for_indexes_online(timeout_sec=0.05, poll_interval=0.01)
+        self.assertFalse(res)
+
+    def test_migration_script_helpers(self):
+        """Verify migration script functions execute schema queries and inspect status."""
+        from scripts.migrate_neo4j_schema import apply_schema, get_index_status, wait_for_indexes
+
+        mock_driver = MagicMock()
+        mock_session = MagicMock()
+        mock_driver.session.return_value.__enter__.return_value = mock_session
+        mock_session.run.return_value = [
+            {"name": "entity_graph_name", "state": "ONLINE", "populationPercent": 100.0, "type": "RANGE"}
+        ]
+
+        apply_schema(mock_driver)
+        self.assertEqual(mock_session.run.call_count, len(neo4j_schema.ALL_SCHEMA_QUERIES))
+
+        status = get_index_status(mock_driver)
+        self.assertEqual(len(status), 1)
+        self.assertEqual(status[0]["name"], "entity_graph_name")
+
+        online = wait_for_indexes(mock_driver, timeout_sec=1.0)
+        self.assertTrue(online)
 
     # ----------------------------------------------------------------
     # 2. Single Write Transaction per Chunk & UNWIND batching
