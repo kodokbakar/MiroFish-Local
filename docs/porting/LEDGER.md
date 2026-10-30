@@ -49,6 +49,8 @@ Only the orchestrator edits this file.
 | 030 | - | Issue #9: unhandled KeyError and AttributeError crash in ReACT loop and chat endpoint during tool call parsing | bugfix | direct | low | ported | `0f806e8` | Fixed and tested on branch kodokbakar/fix-report_agent-unhandled-keyerror-and-attribut; 499 tests passed. |
 | 031 | - | Issue #10: Unhandled TypeError and AttributeError on malformed source_targets and entity_types in ontology validation | bugfix | direct | low | ported | `59cae4c` | Fixed and tested on branch kodokbakar/unhandled-typeerror-and-attributeerror-on-malfor; 476 tests passed. |
 | 032 | - | Issue #11: batch Cypher UNWIND transactions and index entity lookups in graph ingestion pipeline | perf | adapt | medium | ported | PR #27 (`kodokbakar/batch-cypher-unwind-transactions-and-index-entity-lookups`) | Batched UNWIND transactions, schema composite/relation indexes, batch node retrieval API, ontology caching, migration script; 594 tests passed. |
+| 033 | - | Issue #36: unhandled TypeError in interview workflows when agent profile bio is None | bugfix | direct | low | ported | PR #43 (`476a079`) | Normalize missing or null bio to empty string in _select_agents_for_interview and interview_agents; 596 tests passed. |
+| 034 | - | Issue #38: unhandled None entity name in _generate_username crashes batch profile generation | bugfix | direct | low | ported | PR #44 (`0c74b07`) | Fall back to safe 'agent' username and Agent {idx+1} fallback persona on missing/blank entity name; 596 tests passed. |
 
 ## Skipped (with reason)
 | Upstream commit | Reason |
