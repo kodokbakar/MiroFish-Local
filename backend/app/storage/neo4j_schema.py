@@ -22,6 +22,17 @@ CREATE CONSTRAINT episode_uuid IF NOT EXISTS
 FOR (ep:Episode) REQUIRE ep.uuid IS UNIQUE
 """
 
+# Property indexes (for fast MERGE lookups and edge filtering)
+CREATE_ENTITY_GRAPH_NAME_INDEX = """
+CREATE INDEX entity_graph_name IF NOT EXISTS
+FOR (n:Entity) ON (n.graph_id, n.name_lower)
+"""
+
+CREATE_RELATION_GRAPH_ID_INDEX = """
+CREATE INDEX relation_graph_id IF NOT EXISTS
+FOR ()-[r:RELATION]-() ON (r.graph_id)
+"""
+
 # Vector indexes (Neo4j 5.11+)
 CREATE_ENTITY_VECTOR_INDEX = f"""
 CREATE VECTOR INDEX entity_embedding IF NOT EXISTS
@@ -52,11 +63,18 @@ CREATE FULLTEXT INDEX fact_fulltext IF NOT EXISTS
 FOR ()-[r:RELATION]-() ON EACH [r.fact, r.name]
 """
 
+# Query to inspect index population status
+CHECK_INDEXES_QUERY = """
+SHOW INDEXES YIELD name, state, populationPercent, type
+"""
+
 # All schema queries to run on startup
 ALL_SCHEMA_QUERIES = [
     CREATE_GRAPH_UUID_CONSTRAINT,
     CREATE_ENTITY_UUID_CONSTRAINT,
     CREATE_EPISODE_UUID_CONSTRAINT,
+    CREATE_ENTITY_GRAPH_NAME_INDEX,
+    CREATE_RELATION_GRAPH_ID_INDEX,
     CREATE_ENTITY_VECTOR_INDEX,
     CREATE_RELATION_VECTOR_INDEX,
     CREATE_ENTITY_FULLTEXT_INDEX,

@@ -71,13 +71,52 @@ class InMemoryNeo4jDriver:
                 return FakeResult([])
 
             # Entity attribute retrieval (check existing attributes before upsert)
+            if "WHERE n.name_lower IN $name_lowers" in cleaned_query and "RETURN n.name_lower AS name_lower, n.attributes_json AS attributes_json" in cleaned_query:
+                results = []
+                for nl in kwargs.get("name_lowers", []):
+                    key = (kwargs["gid"], nl)
+                    if key in self.db.entities:
+                        results.append({
+                            "name_lower": nl,
+                            "attributes_json": self.db.entities[key].get("attributes_json"),
+                        })
+                return FakeResult(results)
+
             if "MATCH (n:Entity {graph_id: $gid, name_lower: $name_lower})" in cleaned_query and "RETURN n.attributes_json AS attributes_json" in cleaned_query:
                 key = (kwargs["gid"], kwargs["name_lower"])
                 if key in self.db.entities:
                     return FakeResult([{"attributes_json": self.db.entities[key].get("attributes_json")}])
                 return FakeResult([])
 
-            # Entity upsert (MERGE entity)
+            # Entity upsert (UNWIND or single MERGE)
+            if "UNWIND $entities AS e" in cleaned_query:
+                results = []
+                gid = kwargs["gid"]
+                now = kwargs.get("now", "")
+                for e in kwargs.get("entities", []):
+                    nl = e["name_lower"]
+                    key = (gid, nl)
+                    if key in self.db.entities:
+                        ent = self.db.entities[key]
+                        if not ent.get("summary"):
+                            ent["summary"] = e.get("summary", "")
+                        ent["attributes_json"] = e.get("attrs_json", "{}")
+                        ent["embedding"] = e.get("embedding", [])
+                    else:
+                        ent = {
+                            "uuid": e["uuid"],
+                            "name": e["name"],
+                            "name_lower": nl,
+                            "summary": e.get("summary", ""),
+                            "attributes_json": e.get("attrs_json", "{}"),
+                            "embedding": e.get("embedding", []),
+                            "created_at": now,
+                            "labels": ["Entity"],
+                        }
+                        self.db.entities[key] = ent
+                    results.append({"name_lower": nl, "uuid": self.db.entities[key]["uuid"]})
+                return FakeResult(results)
+
             if "MERGE (n:Entity {graph_id: $gid, name_lower: $name_lower})" in cleaned_query:
                 key = (kwargs["gid"], kwargs["name_lower"])
                 if key in self.db.entities:
@@ -102,15 +141,69 @@ class InMemoryNeo4jDriver:
 
             # Label assignment
             if "SET n:`" in cleaned_query:
-                key = (kwargs["gid"], kwargs["nl"])
-                if key in self.db.entities:
-                    label = cleaned_query.split("SET n:`")[1].split("`")[0]
-                    labels = self.db.entities[key].setdefault("labels", ["Entity"])
-                    if label not in labels:
-                        labels.append(label)
+                label = cleaned_query.split("SET n:`")[1].split("`")[0]
+                names = kwargs.get("names")
+                if names is None:
+                    names = [kwargs.get("nl")]
+                for nl in names:
+                    if nl:
+                        key = (kwargs["gid"], nl)
+                        if key in self.db.entities:
+                            labels = self.db.entities[key].setdefault("labels", ["Entity"])
+                            if label not in labels:
+                                labels.append(label)
                 return FakeResult([])
 
-            # Relation upsert (MERGE relation)
+            # Missing entity lookup for relations
+            if "WHERE n.name_lower IN $missing_names" in cleaned_query and "RETURN n.name_lower AS name_lower, n.uuid AS uuid" in cleaned_query:
+                results = []
+                for nl in kwargs.get("missing_names", []):
+                    key = (kwargs["gid"], nl)
+                    if key in self.db.entities:
+                        results.append({"name_lower": nl, "uuid": self.db.entities[key]["uuid"]})
+                return FakeResult(results)
+
+            # Relation upsert (UNWIND or single MERGE)
+            if "UNWIND $relations AS rel_data" in cleaned_query:
+                gid = kwargs["gid"]
+                ep_id = kwargs["episode_id"]
+                now = kwargs.get("now", "")
+                for r in kwargs.get("relations", []):
+                    src_uuid = r["source_uuid"]
+                    tgt_uuid = r["target_uuid"]
+                    name = r["name"]
+                    key = (src_uuid, tgt_uuid, gid, name)
+
+                    if key in self.db.relations:
+                        rel = self.db.relations[key]
+                        current_episodes = rel.get("episode_ids")
+                        if current_episodes is None:
+                            rel["episode_ids"] = [ep_id]
+                        elif ep_id not in current_episodes:
+                            rel["episode_ids"].append(ep_id)
+
+                        if not rel.get("fact"):
+                            rel["fact"] = r.get("fact", "")
+                            rel["fact_embedding"] = r.get("fact_embedding", [])
+                    else:
+                        rel = {
+                            "uuid": r["uuid"],
+                            "graph_id": gid,
+                            "name": name,
+                            "source_uuid": src_uuid,
+                            "target_uuid": tgt_uuid,
+                            "fact": r.get("fact", ""),
+                            "fact_embedding": r.get("fact_embedding", []),
+                            "attributes_json": "{}",
+                            "episode_ids": [ep_id],
+                            "created_at": now,
+                            "valid_at": None,
+                            "invalid_at": None,
+                            "expired_at": None,
+                        }
+                        self.db.relations[key] = rel
+                return FakeResult([])
+
             if "MERGE (src)-[r:RELATION {graph_id: $gid, name: $name}]->(tgt)" in cleaned_query:
                 src_uuid = kwargs["src_uuid"]
                 tgt_uuid = kwargs["tgt_uuid"]
@@ -150,6 +243,18 @@ class InMemoryNeo4jDriver:
                     }
                     self.db.relations[key] = rel
                 return FakeResult([])
+
+            # Node batch retrieval
+            if "MATCH (n:Entity)" in cleaned_query and "WHERE n.uuid IN $uuids" in cleaned_query:
+                results = []
+                uuids = set(kwargs.get("uuids", []))
+                for ent in self.db.entities.values():
+                    if ent.get("uuid") in uuids:
+                        results.append({
+                            "n": ent,
+                            "labels": ent.get("labels", ["Entity"]),
+                        })
+                return FakeResult(results)
 
             return FakeResult([])
 
@@ -299,16 +404,17 @@ class TestNeo4jStorageIngestion(unittest.TestCase):
         self.assertEqual(len(relation_queries), 1)
         cypher, params = relation_queries[0]
 
-        # Verify MERGE pattern specifies graph_id and name
-        self.assertIn("MERGE (src)-[r:RELATION {graph_id: $gid, name: $name}]->(tgt)", cypher)
+        # Verify UNWIND batching and MERGE pattern specifies graph_id and name
+        self.assertIn("UNWIND $relations AS rel_data", cypher)
+        self.assertIn("MERGE (src)-[r:RELATION {graph_id: $gid, name: rel_data.name}]->(tgt)", cypher)
 
         # Verify ON CREATE SET sets required fields
         self.assertIn("ON CREATE SET", cypher)
-        self.assertIn("r.uuid = $uuid", cypher)
+        self.assertIn("r.uuid = rel_data.uuid", cypher)
         self.assertIn("r.graph_id = $gid", cypher)
-        self.assertIn("r.name = $name", cypher)
-        self.assertIn("r.fact = $fact", cypher)
-        self.assertIn("r.fact_embedding = $fact_embedding", cypher)
+        self.assertIn("r.name = rel_data.name", cypher)
+        self.assertIn("r.fact = rel_data.fact", cypher)
+        self.assertIn("r.fact_embedding = rel_data.fact_embedding", cypher)
         self.assertIn("r.attributes_json = '{}'", cypher)
         self.assertIn("r.episode_ids = [$episode_id]", cypher)
         self.assertIn("r.created_at = $now", cypher)
@@ -323,13 +429,14 @@ class TestNeo4jStorageIngestion(unittest.TestCase):
         self.assertIn("ELSE r.episode_ids + [$episode_id]", cypher)
 
         # Verify ON MATCH SET updates fact/fact_embedding if existing fact is empty
-        self.assertIn("WHEN r.fact = '' OR r.fact IS NULL THEN $fact_embedding", cypher)
-        self.assertIn("WHEN r.fact = '' OR r.fact IS NULL THEN $fact", cypher)
+        self.assertIn("WHEN r.fact = '' OR r.fact IS NULL THEN rel_data.fact_embedding", cypher)
+        self.assertIn("WHEN r.fact = '' OR r.fact IS NULL THEN rel_data.fact", cypher)
 
         # Verify parameters passed
         self.assertEqual(params["gid"], "test-graph")
-        self.assertEqual(params["name"], "WORKS_AT")
-        self.assertEqual(params["fact"], "Alice works at TechCorp")
+        self.assertEqual(len(params["relations"]), 1)
+        self.assertEqual(params["relations"][0]["name"], "WORKS_AT")
+        self.assertEqual(params["relations"][0]["fact"], "Alice works at TechCorp")
 
     def test_relation_deduplication_and_episode_ids_accumulation(self):
         """Verify relations between same source and target with same name are deduplicated and episode_ids accumulate."""
