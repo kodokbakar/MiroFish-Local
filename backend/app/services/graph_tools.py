@@ -1211,7 +1211,7 @@ Return the sub-questions as a JSON list."""
                 agent = selected_agents[i]
                 agent_name = agent.get("realname", agent.get("username", f"Agent_{agent_idx}"))
                 agent_role = agent.get("profession", "Unknown")
-                agent_bio = agent.get("bio", "")
+                agent_bio = agent.get("bio") or ""
 
                 twitter_result = results_dict.get(f"twitter_{agent_idx}", {})
                 reddit_result = results_dict.get(f"reddit_{agent_idx}", {})
@@ -1363,7 +1363,7 @@ Return the sub-questions as a JSON list."""
                 "index": i,
                 "name": profile.get("realname", profile.get("username", f"Agent_{i}")),
                 "profession": profile.get("profession", "Unknown"),
-                "bio": profile.get("bio", "")[:200],
+                "bio": (profile.get("bio") or "")[:200],
                 "interested_topics": profile.get("interested_topics", [])
             }
             agent_summaries.append(summary)
