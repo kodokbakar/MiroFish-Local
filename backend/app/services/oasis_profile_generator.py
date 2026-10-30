@@ -325,11 +325,12 @@ class OasisProfileGenerator:
             source_entity_type=entity_type,
         )
     
-    def _generate_username(self, name: str) -> str:
-        """Generate username"""
+    def _generate_username(self, name: Optional[str]) -> str:
+        """Generate username, falling back to a safe value when the entity name is missing."""
         # Remove special characters, convert to lowercase
-        username = name.lower().replace(" ", "_")
-        username = ''.join(c for c in username if c.isalnum() or c == '_')
+        normalized_name = _coerce_to_str(name).strip() or "agent"
+        username = normalized_name.lower().replace(" ", "_")
+        username = ''.join(c for c in username if c.isalnum() or c == '_') or "agent"
 
         # Add random suffix to avoid duplicates
         suffix = random.randint(100, 999)
@@ -925,13 +926,14 @@ Important:
                 return idx, profile, None
 
             except Exception as e:
-                logger.error(f"Failed to generate persona for entity {entity.name}: {str(e)}")
-                # Create a fallback profile
+                entity_name = _coerce_to_str(entity.name).strip() or f"Agent {idx + 1}"
+                logger.error(f"Failed to generate persona for entity {entity_name}: {str(e)}")
+                # Create a fallback profile with a usable name even when the entity is unnamed.
                 fallback_profile = OasisAgentProfile(
                     user_id=idx,
-                    user_name=self._generate_username(entity.name),
-                    name=entity.name,
-                    bio=f"{entity_type}: {entity.name}",
+                    user_name=self._generate_username(entity_name),
+                    name=entity_name,
+                    bio=f"{entity_type}: {entity_name}",
                     persona=entity.summary or f"A participant in social discussions.",
                     source_entity_uuid=entity.uuid,
                     source_entity_type=entity_type,
