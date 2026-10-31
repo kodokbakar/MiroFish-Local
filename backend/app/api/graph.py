@@ -380,8 +380,29 @@ def build_graph():
 
         # Get configuration
         graph_name = data.get('graph_name', project.name or 'MiroFish Graph')
-        chunk_size = data.get('chunk_size', project.chunk_size or Config.DEFAULT_CHUNK_SIZE)
-        chunk_overlap = data.get('chunk_overlap', project.chunk_overlap or Config.DEFAULT_CHUNK_OVERLAP)
+        chunk_size_raw = data.get('chunk_size', project.chunk_size or Config.DEFAULT_CHUNK_SIZE)
+        chunk_overlap_raw = data.get('chunk_overlap', project.chunk_overlap or Config.DEFAULT_CHUNK_OVERLAP)
+
+        # Validate chunk configuration
+        try:
+            if isinstance(chunk_size_raw, bool) or isinstance(chunk_overlap_raw, bool):
+                raise ValueError("Boolean values are not valid chunk sizes")
+            if isinstance(chunk_size_raw, float) and not chunk_size_raw.is_integer():
+                raise ValueError("Float values with decimal parts are not valid chunk sizes")
+            if isinstance(chunk_overlap_raw, float) and not chunk_overlap_raw.is_integer():
+                raise ValueError("Float values with decimal parts are not valid chunk sizes")
+            chunk_size = int(chunk_size_raw)
+            chunk_overlap = int(chunk_overlap_raw)
+            if chunk_size < 100 or chunk_overlap < 0 or chunk_overlap >= chunk_size:
+                return jsonify({
+                    "success": False,
+                    "error": "Invalid chunk configuration: chunk_size must be >= 100 and chunk_overlap must be >= 0 and < chunk_size"
+                }), 400
+        except (ValueError, TypeError):
+            return jsonify({
+                "success": False,
+                "error": "Invalid chunk configuration: chunk_size must be >= 100 and chunk_overlap must be >= 0 and < chunk_size"
+            }), 400
 
         # Update project configuration
         project.chunk_size = chunk_size
