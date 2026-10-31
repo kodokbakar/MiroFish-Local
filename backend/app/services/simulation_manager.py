@@ -425,6 +425,19 @@ class SimulationManager:
                     total=3
                 )
             
+            config_progress_cb = None
+            if progress_callback:
+                def config_progress_cb(step: int, total_steps: int, msg: str):
+                    pct = int(step / total_steps * 100) if total_steps > 0 else 0
+                    progress_callback(
+                        "generating_config",
+                        pct,
+                        msg,
+                        current=step,
+                        total=total_steps,
+                        item_name=msg,
+                    )
+
             sim_params = config_generator.generate_config(
                 simulation_id=simulation_id,
                 project_id=state.project_id,
@@ -433,7 +446,9 @@ class SimulationManager:
                 document_text=document_text,
                 entities=filtered.entities,
                 enable_twitter=state.enable_twitter,
-                enable_reddit=state.enable_reddit
+                enable_reddit=state.enable_reddit,
+                progress_callback=config_progress_cb,
+                parallel_count=parallel_profile_count,
             )
             
             if progress_callback:

@@ -508,7 +508,12 @@ def prepare_simulation():
         
         entity_types_list = data.get('entity_types')
         use_llm_for_profiles = data.get('use_llm_for_profiles', True)
-        parallel_profile_count = data.get('parallel_profile_count', 5)
+        try:
+            parallel_profile_count = int(data.get('parallel_profile_count', 5))
+            if parallel_profile_count <= 0:
+                parallel_profile_count = 5
+        except (TypeError, ValueError):
+            parallel_profile_count = 5
         
         # ========== Get GraphStorage（Capture reference before background task starts） ==========
         storage = current_app.extensions.get('neo4j_storage')

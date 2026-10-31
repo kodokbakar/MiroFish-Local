@@ -10,8 +10,10 @@ Adopt step-by-step generation strategy to avoid failures from generating too lon
 4. Generate platform configuration
 """
 
+import concurrent.futures
 import json
 import math
+import threading
 from typing import Dict, Any, List, Optional, Callable
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
@@ -251,6 +253,7 @@ class SimulationConfigGenerator:
         enable_twitter: bool = True,
         enable_reddit: bool = True,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        parallel_count: int = 5,
     ) -> SimulationParameters:
         """
         Intelligently generate complete simulation configuration (step-by-step generation)
@@ -265,23 +268,29 @@ class SimulationConfigGenerator:
             enable_twitter: Whether to enable Twitter
             enable_reddit: Whether to enable Reddit
             progress_callback: Progress callback function(current_step, total_steps, message)
+            parallel_count: Number of concurrent tasks for structural and batch generation, default 5
 
         Returns:
             SimulationParameters: Complete simulation parameters
         """
-        logger.info(f"Starting intelligent simulation configuration generation: simulation_id={simulation_id}, entities={len(entities)}")
-        
+        logger.info(f"Starting intelligent simulation configuration generation: simulation_id={simulation_id}, entities={len(entities)}, parallel_count={parallel_count}")
+
         # Calculate total steps
         num_batches = math.ceil(len(entities) / self.AGENTS_PER_BATCH)
         total_steps = 3 + num_batches  # time config + event config + N batch agents + platform config
         current_step = 0
+        progress_lock = threading.Lock()
 
         def report_progress(step: int, message: str):
             nonlocal current_step
-            current_step = step
-            if progress_callback:
-                progress_callback(step, total_steps, message)
-            logger.info(f"[{step}/{total_steps}] {message}")
+            with progress_lock:
+                current_step = step
+                if progress_callback:
+                    try:
+                        progress_callback(step, total_steps, message)
+                    except Exception as e:
+                        logger.warning(f"Progress callback failed: {e}")
+                logger.info(f"[{step}/{total_steps}] {message}")
 
         # 1. Build basic context information
         context = self._build_context(
@@ -289,42 +298,74 @@ class SimulationConfigGenerator:
             document_text=document_text,
             entities=entities
         )
-        
+
         reasoning_parts = []
-        
-        # ========== Step 1: Generate time configuration ==========
-        report_progress(1, "Generating time configuration...")
         num_entities = len(entities)
-        time_config_result = self._generate_time_config(context, num_entities)
-        time_config = self._parse_time_config(time_config_result, num_entities)
-        reasoning_parts.append(f"Time config: {time_config_result.get('reasoning', 'Success')}")
+        max_workers = max(1, int(parallel_count)) if parallel_count else 5
 
-        # ========== Step 2: Generate event configuration ==========
-        report_progress(2, "Generating event configuration and hot topics...")
-        event_config_result = self._generate_event_config(context, simulation_requirement, entities)
-        event_config = self._parse_event_config(event_config_result)
-        reasoning_parts.append(f"Event config: {event_config_result.get('reasoning', 'Success')}")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # ========== Steps 1 & 2: Generate time and event configurations concurrently ==========
+            time_future = executor.submit(self._generate_time_config, context, num_entities)
+            event_future = executor.submit(self._generate_event_config, context, simulation_requirement, entities)
 
-        # ========== Step 3-N: Generate agent configurations in batches ==========
-        all_agent_configs = []
-        for batch_idx in range(num_batches):
-            start_idx = batch_idx * self.AGENTS_PER_BATCH
-            end_idx = min(start_idx + self.AGENTS_PER_BATCH, len(entities))
-            batch_entities = entities[start_idx:end_idx]
+            structural_futures = {
+                time_future: "time",
+                event_future: "event"
+            }
+            time_config_result = None
+            event_config_result = None
+            completed_structural = 0
 
-            report_progress(
-                3 + batch_idx,
-                f"Generating agent configuration ({start_idx + 1}-{end_idx}/{len(entities)})..."
-            )
-            
-            batch_configs = self._generate_agent_configs_batch(
-                context=context,
-                entities=batch_entities,
-                start_idx=start_idx,
-                simulation_requirement=simulation_requirement
-            )
-            all_agent_configs.extend(batch_configs)
-        
+            for future in concurrent.futures.as_completed(structural_futures):
+                cfg_type = structural_futures[future]
+                completed_structural += 1
+                if cfg_type == "time":
+                    time_config_result = future.result()
+                    report_progress(completed_structural, "Completed time configuration generation")
+                else:
+                    event_config_result = future.result()
+                    report_progress(completed_structural, "Completed event configuration and hot topics generation")
+
+            time_config = self._parse_time_config(time_config_result, num_entities)
+            reasoning_parts.append(f"Time config: {time_config_result.get('reasoning', 'Success')}")
+
+            event_config = self._parse_event_config(event_config_result)
+            reasoning_parts.append(f"Event config: {event_config_result.get('reasoning', 'Success')}")
+
+            # ========== Step 3-N: Generate agent configurations in batches concurrently ==========
+            batch_slots: List[Optional[List[AgentActivityConfig]]] = [None] * num_batches
+            if num_batches > 0:
+                batch_futures = {}
+                for batch_idx in range(num_batches):
+                    start_idx = batch_idx * self.AGENTS_PER_BATCH
+                    end_idx = min(start_idx + self.AGENTS_PER_BATCH, len(entities))
+                    batch_entities = entities[start_idx:end_idx]
+
+                    future = executor.submit(
+                        self._generate_agent_configs_batch,
+                        context=context,
+                        entities=batch_entities,
+                        start_idx=start_idx,
+                        simulation_requirement=simulation_requirement
+                    )
+                    batch_futures[future] = (batch_idx, start_idx, end_idx)
+
+                completed_batches = 0
+                for future in concurrent.futures.as_completed(batch_futures):
+                    batch_idx, start_idx, end_idx = batch_futures[future]
+                    batch_configs = future.result()
+                    batch_slots[batch_idx] = batch_configs
+                    completed_batches += 1
+                    report_progress(
+                        2 + completed_batches,
+                        f"Generated agent configuration batch {completed_batches}/{num_batches} ({start_idx + 1}-{end_idx}/{len(entities)})..."
+                    )
+
+            all_agent_configs: List[AgentActivityConfig] = []
+            for batch_configs in batch_slots:
+                if batch_configs:
+                    all_agent_configs.extend(batch_configs)
+
         reasoning_parts.append(f"Agent config: Successfully generated {len(all_agent_configs)}")
 
         # ========== Assign initial post agents ==========
