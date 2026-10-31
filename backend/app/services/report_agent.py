@@ -13,6 +13,7 @@ import os
 import json
 import time
 import re
+import threading
 from typing import Dict, Any, List, Optional, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -450,7 +451,12 @@ class Report:
     created_at: str = ""
     completed_at: str = ""
     error: Optional[str] = None
-    
+
+    @property
+    def id(self) -> str:
+        """Alias for report_id for property compatibility"""
+        return self.report_id
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "report_id": self.report_id,
@@ -888,6 +894,10 @@ class ReportAgent:
 
     # Maximum tool call count in conversation
     MAX_TOOL_CALLS_PER_CHAT = 2
+
+    # Maximum observation character budget in ReACT loop
+    MAX_OBSERVATION_CHARS = 4000
+    OBSERVATION_TRUNCATION_SUFFIX = "... [observation truncated for context budgeting]"
     
     def __init__(
         self,
@@ -1192,7 +1202,51 @@ class ReportAgent:
         cleaned = re.sub(r'<tool_result\b.*$', '', cleaned, flags=re.IGNORECASE | re.DOTALL)
         cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
         return cleaned.strip()
-    
+
+    @staticmethod
+    def _is_valid_synthesized_answer(answer: str) -> bool:
+        """
+        Check if a Final Answer contains evidence, quotes, or is sufficiently synthesized.
+        Allows adaptive early-exit to avoid discarding complete answers.
+        """
+        if not answer:
+            return False
+
+        trimmed = answer.strip()
+        # A minimal complete section must have reasonable substance
+        if len(trimmed) < 40:
+            return False
+
+        # Exclude refusal, meta-commentary, or placeholder phrases
+        lower = trimmed.lower()
+        rejection_phrases = [
+            "need more information",
+            "insufficient data",
+            "cannot generate",
+            "call more tools",
+            "need to search",
+            "please provide more",
+        ]
+        if any(phrase in lower for phrase in rejection_phrases) and len(trimmed) < 150:
+            return False
+
+        # Check for evidence: quotation marks, blockquotes, or explicit citations
+        has_quote = bool(
+            re.search(r'(?:^|\n)\s*>\s*.+', trimmed)
+            or re.search(r'["\'“”「」].+?["\'“”「」]', trimmed)
+        )
+
+        # Check for synthesis structures: bold markdown, bullet points, numbered lists, or multi-paragraph content
+        has_structure = bool(
+            re.search(r'\*\*.*?\*\*', trimmed)
+            or re.search(r'(?:^|\n)\s*[-*•]\s+.+', trimmed)
+            or re.search(r'(?:^|\n)\s*\d+\.\s+.+', trimmed)
+        )
+        has_paragraphs = len([p for p in trimmed.split("\n\n") if p.strip()]) >= 2
+        is_substantial = len(trimmed) >= 120
+
+        return has_quote or has_structure or has_paragraphs or is_substantial
+
     def plan_outline(
         self,
         progress_callback: Optional[Callable] = None
@@ -1435,8 +1489,17 @@ class ReportAgent:
             # ── Case 1: LLM output Final Answer ──
             if has_final_answer:
                 cleaned_response = ReportAgent._strip_fake_tool_results(response)
-                # Insufficient tool calls, reject and request to continue calling tools
-                if tool_calls_count < min_tool_calls:
+                candidate_answer = cleaned_response.split("Final Answer:")[-1].strip()
+
+                # Adaptive early-exit: allow completion if tool_calls_count >= 1 and
+                # the final answer contains evidence/quotes or is sufficiently synthesized.
+                can_early_exit = (
+                    tool_calls_count >= 1
+                    and ReportAgent._is_valid_synthesized_answer(candidate_answer)
+                )
+
+                # Insufficient tool calls and not eligible for early-exit: request more tools
+                if tool_calls_count < min_tool_calls and not can_early_exit:
                     messages.append({"role": "assistant", "content": cleaned_response})
                     unused_tools = all_tools - used_tools
                     unused_hint = f"(These tools have not been used, recommend using them: {', '.join(unused_tools)}）" if unused_tools else ""
@@ -1450,9 +1513,12 @@ class ReportAgent:
                     })
                     continue
 
-                # Normal completion
-                final_answer = cleaned_response.split("Final Answer:")[-1].strip()
-                logger.info(f"Section {section.title} generation completed (tool calls: {tool_calls_count}times)")
+                # Normal completion or adaptive early-exit
+                final_answer = candidate_answer
+                logger.info(
+                    f"Section {section.title} generation completed "
+                    f"(tool calls: {tool_calls_count} times, early_exit: {tool_calls_count < min_tool_calls})"
+                )
 
                 if self.report_logger:
                     self.report_logger.log_section_content(
@@ -1524,13 +1590,22 @@ class ReportAgent:
                 if unused_tools and tool_calls_count < self.MAX_TOOL_CALLS_PER_SECTION:
                     unused_hint = REACT_UNUSED_TOOLS_HINT.format(unused_list="、".join(unused_tools))
 
+                # Observation context budgeting: truncate tool results exceeding character budget
+                if len(result) > self.MAX_OBSERVATION_CHARS:
+                    budgeted_result = (
+                        result[:self.MAX_OBSERVATION_CHARS]
+                        + f"\n{self.OBSERVATION_TRUNCATION_SUFFIX}"
+                    )
+                else:
+                    budgeted_result = result
+
                 cleaned_response = ReportAgent._strip_fake_tool_results(response)
                 messages.append({"role": "assistant", "content": cleaned_response})
                 messages.append({
                     "role": "user",
                     "content": REACT_OBSERVATION_TEMPLATE.format(
                         tool_name=tool_name,
-                        result=result,
+                        result=budgeted_result,
                         tool_calls_count=tool_calls_count,
                         max_tool_calls=self.MAX_TOOL_CALLS_PER_SECTION,
                         used_tools_str=", ".join(used_tools),
@@ -1543,7 +1618,12 @@ class ReportAgent:
             cleaned_response = ReportAgent._strip_fake_tool_results(response)
             messages.append({"role": "assistant", "content": cleaned_response})
 
-            if tool_calls_count < min_tool_calls:
+            can_early_exit = (
+                tool_calls_count >= 1
+                and ReportAgent._is_valid_synthesized_answer(cleaned_response)
+            )
+
+            if tool_calls_count < min_tool_calls and not can_early_exit:
                 # Tool callcount insufficient，recommend unused tools
                 unused_tools = all_tools - used_tools
                 unused_hint = f"(These tools have not been used, recommend using them: {', '.join(unused_tools)}）" if unused_tools else ""
@@ -1559,8 +1639,10 @@ class ReportAgent:
                 continue
 
             # Directly adopt this content as final answer, no more waiting
-            # directlyconvertthis contentas finalanswer, no more waiting
-            logger.info(f"Section {section.title} did not detectto 'Final Answer:' prefix, directlyadoptLLM outputas finalcontent（Tool call: {tool_calls_count}times)")
+            logger.info(
+                f"Section {section.title} did not detect 'Final Answer:' prefix, directly adopt LLM output as final content "
+                f"(tool calls: {tool_calls_count} times, early_exit: {tool_calls_count < min_tool_calls})"
+            )
             final_answer = cleaned_response
 
             if self.report_logger:
@@ -1980,6 +2062,16 @@ class ReportManager:
     
     # Reportstorage directory
     REPORTS_DIR = os.path.join(Config.UPLOAD_FOLDER, 'reports')
+
+    # In-memory thread-safe simulation_id -> report_id cache
+    _simulation_report_cache: Dict[str, str] = {}
+    _cache_lock: threading.Lock = threading.Lock()
+
+    @classmethod
+    def clear_cache(cls) -> None:
+        """Clear in-memory simulation report cache (primarily for tests)"""
+        with cls._cache_lock:
+            cls._simulation_report_cache.clear()
     
     @classmethod
     def _ensure_reports_dir(cls):
@@ -2054,7 +2146,7 @@ class ReportManager:
             }
         """
         log_path = cls._get_console_log_path(report_id)
-        
+
         if not os.path.exists(log_path):
             return {
                 "logs": [],
@@ -2062,47 +2154,51 @@ class ReportManager:
                 "from_line": 0,
                 "has_more": False
             }
-        
+
+        from_line = max(0, from_line)
         logs = []
         total_lines = 0
-        
+
         with open(log_path, 'r', encoding='utf-8') as f:
-            for i, line in enumerate(f):
-                total_lines = i + 1
-                if i >= from_line:
-                    # keeporiginallogrow，remove trailingrowcharacter
-                    logs.append(line.rstrip('\n\r'))
-        
+            for _ in range(from_line):
+                line = f.readline()
+                if not line:
+                    break
+                total_lines += 1
+            for line in f:
+                total_lines += 1
+                logs.append(line.rstrip('\n\r'))
+
         return {
             "logs": logs,
             "total_lines": total_lines,
             "from_line": from_line,
             "has_more": False  # alreadyReadto the end
         }
-    
+
     @classmethod
     def get_console_log_stream(cls, report_id: str) -> List[str]:
         """
         GetCompleteconsolelog（one-timeGetall）
-        
+
         Args:
             report_id: ReportID
-            
+
         Returns:
             logrowlist
         """
         result = cls.get_console_log(report_id, from_line=0)
         return result["logs"]
-    
+
     @classmethod
     def get_agent_log(cls, report_id: str, from_line: int = 0) -> Dict[str, Any]:
         """
         Get Agent logcontent
-        
+
         Args:
             report_id: ReportID
             from_line: from which rowrowStartRead（for incrementalGet，0 means from the beginningStart）
-            
+
         Returns:
             {
                 "logs": [logentrylist],
@@ -2112,7 +2208,7 @@ class ReportManager:
             }
         """
         log_path = cls._get_agent_log_path(report_id)
-        
+
         if not os.path.exists(log_path):
             return {
                 "logs": [],
@@ -2120,21 +2216,31 @@ class ReportManager:
                 "from_line": 0,
                 "has_more": False
             }
-        
+
+        from_line = max(0, from_line)
         logs = []
         total_lines = 0
-        
+
         with open(log_path, 'r', encoding='utf-8') as f:
-            for i, line in enumerate(f):
-                total_lines = i + 1
-                if i >= from_line:
-                    try:
-                        log_entry = json.loads(line.strip())
-                        logs.append(log_entry)
-                    except json.JSONDecodeError:
-                        # skip parsingfailedrow
-                        continue
-        
+            # Skip lines prior to from_line without JSON decoding
+            for _ in range(from_line):
+                line = f.readline()
+                if not line:
+                    break
+                total_lines += 1
+
+            # Incrementally read and parse JSON only from from_line onwards
+            for line in f:
+                total_lines += 1
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                try:
+                    log_entry = json.loads(stripped)
+                    logs.append(log_entry)
+                except json.JSONDecodeError:
+                    continue
+
         return {
             "logs": logs,
             "total_lines": total_lines,
@@ -2506,7 +2612,14 @@ class ReportManager:
     def save_report(cls, report: Report) -> None:
         """SavereportmetainformationandcompleteReport"""
         cls._ensure_report_folder(report.report_id)
-        
+
+        # Update in-memory simulation report cache
+        if report.simulation_id:
+            report_id_val = getattr(report, "id", None) or getattr(report, "report_id", None)
+            if report_id_val:
+                with cls._cache_lock:
+                    cls._simulation_report_cache[report.simulation_id] = report_id_val
+
         # savemetainformationJSON
         with open(cls._get_report_path(report.report_id), 'w', encoding='utf-8') as f:
             json.dump(report.to_dict(), f, ensure_ascii=False, indent=2)
@@ -2578,22 +2691,38 @@ class ReportManager:
     @classmethod
     def get_report_by_simulation(cls, simulation_id: str) -> Optional[Report]:
         """based onsimulationIDgetreport"""
+        # Fast path: check in-memory cache first for O(1) retrieval
+        with cls._cache_lock:
+            cached_report_id = cls._simulation_report_cache.get(simulation_id)
+
+        if cached_report_id:
+            report = cls.get_report(cached_report_id)
+            if report and report.simulation_id == simulation_id:
+                return report
+            # Cache entry stale or missing on disk: evict and fall back to disk scan
+            with cls._cache_lock:
+                cls._simulation_report_cache.pop(simulation_id, None)
+
         cls._ensure_reports_dir()
-        
+
         for item in os.listdir(cls.REPORTS_DIR):
             item_path = os.path.join(cls.REPORTS_DIR, item)
             # newformat：filefolder
             if os.path.isdir(item_path):
                 report = cls.get_report(item)
                 if report and report.simulation_id == simulation_id:
+                    with cls._cache_lock:
+                        cls._simulation_report_cache[simulation_id] = getattr(report, "id", report.report_id)
                     return report
             # backward compatibleformat：JSONfile
             elif item.endswith('.json'):
                 report_id = item[:-5]
                 report = cls.get_report(report_id)
                 if report and report.simulation_id == simulation_id:
+                    with cls._cache_lock:
+                        cls._simulation_report_cache[simulation_id] = getattr(report, "id", report.report_id)
                     return report
-        
+
         return None
     
     @classmethod
@@ -2627,7 +2756,16 @@ class ReportManager:
     def delete_report(cls, report_id: str) -> bool:
         """Deletereport（entirefolder）"""
         import shutil
-        
+
+        # Invalidate in-memory simulation report cache
+        with cls._cache_lock:
+            keys_to_delete = [
+                sim_id for sim_id, rep_id in cls._simulation_report_cache.items()
+                if rep_id == report_id
+            ]
+            for sim_id in keys_to_delete:
+                cls._simulation_report_cache.pop(sim_id, None)
+
         folder_path = cls._get_report_folder(report_id)
         
         # newformat：Deleteentirefilefolder
