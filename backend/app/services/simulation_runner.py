@@ -225,6 +225,14 @@ class SimulationRunner:
     _monitor_threads: Dict[str, threading.Thread] = {}
     _stdout_files: Dict[str, Any] = {}  # Store stdout file handles
     _stderr_files: Dict[str, Any] = {}  # Store stderr file handles
+
+    # In-memory action cache per simulation and thread-safe lock
+    _action_cache: Dict[str, List[AgentAction]] = {}
+    _action_cache_lock: threading.Lock = threading.Lock()
+
+    # In-memory last saved state for dirty checking and lock for atomic save
+    _last_saved_state: Dict[str, Dict[str, Any]] = {}
+    _state_save_lock: threading.Lock = threading.Lock()
     
     # Graph memory update configuration
     _graph_memory_enabled: Dict[str, bool] = {}  # simulation_id -> enabled
@@ -304,16 +312,33 @@ class SimulationRunner:
     
     @classmethod
     def _save_run_state(cls, state: SimulationRunState):
-        """Save run state to file"""
+        """Save run state to file with dirty check and atomic file replacement"""
         sim_dir = os.path.join(cls.RUN_STATE_DIR, state.simulation_id)
         os.makedirs(sim_dir, exist_ok=True)
         state_file = os.path.join(sim_dir, "run_state.json")
-        
+
         data = state.to_detail_dict()
-        
-        with open(state_file, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        
+
+        with cls._state_save_lock:
+            last_saved = cls._last_saved_state.get(state.simulation_id)
+            if last_saved is not None and last_saved == data and os.path.exists(state_file):
+                cls._run_states[state.simulation_id] = state
+                return
+
+            tmp_file = os.path.join(sim_dir, f"run_state.{os.getpid()}.{threading.get_ident()}.tmp")
+            try:
+                with open(tmp_file, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+                os.replace(tmp_file, state_file)
+                cls._last_saved_state[state.simulation_id] = data
+            except Exception:
+                if os.path.exists(tmp_file):
+                    try:
+                        os.remove(tmp_file)
+                    except OSError:
+                        pass
+                raise
+
         cls._run_states[state.simulation_id] = state
     
     @classmethod
@@ -387,7 +412,12 @@ class SimulationRunner:
             total_simulation_hours=total_hours,
             started_at=datetime.now().isoformat(),
         )
-        
+
+        with cls._action_cache_lock:
+            cls._action_cache[simulation_id] = []
+        with cls._state_save_lock:
+            cls._last_saved_state.pop(simulation_id, None)
+
         cls._save_run_state(state)
         
         # If graph memory update enabled, create updater
@@ -775,7 +805,14 @@ class SimulationRunner:
                                 success=action_data.get("success", True),
                             )
                             state.add_action(action)
-                            
+
+                            # Incrementally cache parsed action
+                            sim_id = getattr(state, "simulation_id", str(state))
+                            with cls._action_cache_lock:
+                                if sim_id not in cls._action_cache:
+                                    cls._action_cache[sim_id] = []
+                                cls._action_cache[sim_id].append(action)
+
                             # Update rounds
                             if action.round_num and action.round_num > state.current_round:
                                 state.current_round = action.round_num
@@ -1145,55 +1182,69 @@ class SimulationRunner:
     ) -> List[AgentAction]:
         """
         Get complete action history for all platforms (no pagination limit)
-        
+
         Args:
             simulation_id: Simulation ID
             platform: Filter platform (twitter/reddit)
             agent_id: Filter Agent
             round_num: Filter round
-            
+
         Returns:
             Complete action list (sorted by timestamp, newest first)
         """
-        sim_dir = os.path.join(cls.RUN_STATE_DIR, simulation_id)
-        actions = []
-        
-        # Read Twitter action file (auto-set platform to twitter based on file path)
-        twitter_actions_log = os.path.join(sim_dir, "twitter", "actions.jsonl")
-        if not platform or platform == "twitter":
-            actions.extend(cls._read_actions_from_file(
-                twitter_actions_log,
-                default_platform="twitter",  # Auto-fill platform field
-                platform_filter=platform,
-                agent_id=agent_id, 
-                round_num=round_num
-            ))
-        
-        # Read Reddit action file (auto-set platform to reddit based on file path)
-        reddit_actions_log = os.path.join(sim_dir, "reddit", "actions.jsonl")
-        if not platform or platform == "reddit":
-            actions.extend(cls._read_actions_from_file(
-                reddit_actions_log,
-                default_platform="reddit",  # Auto-fill platform field
-                platform_filter=platform,
-                agent_id=agent_id,
-                round_num=round_num
-            ))
-        
-        # If per-platform files do not exist, try reading old single file format
-        if not actions:
-            actions_log = os.path.join(sim_dir, "actions.jsonl")
-            actions = cls._read_actions_from_file(
-                actions_log,
-                default_platform=None,  # Old format files should have platform field
-                platform_filter=platform,
-                agent_id=agent_id,
-                round_num=round_num
-            )
-        
+        with cls._action_cache_lock:
+            cached = cls._action_cache.get(simulation_id)
+            if cached is not None and len(cached) > 0:
+                cached_actions = list(cached)
+            else:
+                cached_actions = None
+
+        if cached_actions is None:
+            # Cache is empty/cold (e.g. server restart), load from disk files
+            sim_dir = os.path.join(cls.RUN_STATE_DIR, simulation_id)
+            disk_actions = []
+
+            # Read Twitter action file
+            twitter_actions_log = os.path.join(sim_dir, "twitter", "actions.jsonl")
+            if os.path.exists(twitter_actions_log):
+                disk_actions.extend(cls._read_actions_from_file(
+                    twitter_actions_log,
+                    default_platform="twitter"
+                ))
+
+            # Read Reddit action file
+            reddit_actions_log = os.path.join(sim_dir, "reddit", "actions.jsonl")
+            if os.path.exists(reddit_actions_log):
+                disk_actions.extend(cls._read_actions_from_file(
+                    reddit_actions_log,
+                    default_platform="reddit"
+                ))
+
+            # If per-platform files do not exist, try reading old single file format
+            if not disk_actions:
+                actions_log = os.path.join(sim_dir, "actions.jsonl")
+                if os.path.exists(actions_log):
+                    disk_actions = cls._read_actions_from_file(
+                        actions_log,
+                        default_platform=None
+                    )
+
+            with cls._action_cache_lock:
+                if simulation_id not in cls._action_cache or len(cls._action_cache[simulation_id]) == 0:
+                    cls._action_cache[simulation_id] = list(disk_actions)
+                cached_actions = list(cls._action_cache[simulation_id])
+
+        # Filter in memory
+        actions = [
+            a for a in cached_actions
+            if (platform is None or a.platform == platform)
+            and (agent_id is None or a.agent_id == agent_id)
+            and (round_num is None or a.round_num == round_num)
+        ]
+
         # Sort by timestamp (newest first)
         actions.sort(key=lambda x: x.timestamp, reverse=True)
-        
+
         return actions
     
     @classmethod
@@ -1416,6 +1467,10 @@ class SimulationRunner:
         # Clean up in-memory run state
         if simulation_id in cls._run_states:
             del cls._run_states[simulation_id]
+        with cls._action_cache_lock:
+            cls._action_cache.pop(simulation_id, None)
+        with cls._state_save_lock:
+            cls._last_saved_state.pop(simulation_id, None)
         
         logger.info(f"Cleanup simulation logs completed: {simulation_id}, deleted files: {cleaned_files}")
         
@@ -1546,6 +1601,10 @@ class SimulationRunner:
         # Clean up in-memory state
         cls._processes.clear()
         cls._action_queues.clear()
+        with cls._action_cache_lock:
+            cls._action_cache.clear()
+        with cls._state_save_lock:
+            cls._last_saved_state.clear()
         
         logger.info("Simulation process cleanup completed")
     

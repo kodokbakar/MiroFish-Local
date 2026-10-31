@@ -118,16 +118,16 @@ class SimulationIPCClient:
         command_type: CommandType,
         args: Dict[str, Any],
         timeout: float = 60.0,
-        poll_interval: float = 0.5
+        poll_interval: float = 0.05
     ) -> IPCResponse:
         """
         Send command and wait for response
-        
+
         Args:
             command_type: Command type
             args: Command arguments
             timeout: Timeout (seconds)
-            poll_interval: Poll interval (seconds)
+            poll_interval: Poll interval (seconds), default 0.05s (50ms)
             
         Returns:
             IPCResponse
