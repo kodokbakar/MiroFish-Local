@@ -327,15 +327,20 @@ def _check_simulation_prepared(simulation_id: str) -> tuple:
         logger.debug(f"Detect simulation preparation status: {simulation_id}, status={status}, config_generated={config_generated}")
         
         # If config_generated=True and files exist, consider preparation complete
+        # If status is "preparing", it must return (False, "preparing") and NEVER auto-mutate status to "ready"
+        status_val = status.value if hasattr(status, "value") else str(status)
+        if status_val == SimulationStatus.PREPARING.value or status == "preparing":
+            logger.info(f"Simulation {simulation_id} Detection result: currently preparing, not prepared")
+            return False, "preparing"
+
         # The following statuses indicate preparation is complete:
         # - ready: Preparation complete, can run
-        # - preparing: If config_generated=True, description shows completed
         # - running: Running, preparation already completed
         # - paused: Paused, preparation already completed
         # - stopped: Stopped, preparation already completed
         # - completed: Execution complete, preparation already completed
         # - failed: Execution failed (but preparation is not completed)
-        prepared_statuses = ["ready", "preparing", "running", "paused", "stopped", "completed", "failed"]
+        prepared_statuses = ["ready", "running", "paused", "stopped", "completed", "failed"]
         if status in prepared_statuses and config_generated:
             # Get file statistics
             profiles_count = 0
@@ -361,20 +366,7 @@ def _check_simulation_prepared(simulation_id: str) -> tuple:
 
             if profiles_count == 0:
                 profiles_count = state_data.get("profiles_count", 0)
-            
-            # If status is "preparing" but files are completed, update status to "ready"
-            if status == "preparing":
-                try:
-                    state_data["status"] = "ready"
-                    from datetime import datetime
-                    state_data["updated_at"] = datetime.now().isoformat()
-                    with open(state_file, 'w', encoding='utf-8') as f:
-                        json.dump(state_data, f, ensure_ascii=False, indent=2)
-                    logger.info(f"Auto update simulation status: {simulation_id} preparing -> ready")
-                    status = "ready"
-                except Exception as e:
-                    logger.warning(f"Failed to auto update status: {e}")
-            
+
             logger.info(f"Simulation {simulation_id} Detection result: HasPreparation complete (status={status}, config_generated={config_generated})")
             return True, {
                 "status": status,
@@ -549,6 +541,11 @@ def prepare_simulation():
             }
         )
         
+        # When force_regenerate=True, explicitly reset config_generated and profiles_generated
+        if force_regenerate:
+            state.config_generated = False
+            state.profiles_generated = False
+
         # Update simulation status（Include pre-fetched entity count）
         state.status = SimulationStatus.PREPARING
         manager._save_simulation_state(state)
@@ -693,21 +690,21 @@ def prepare_simulation():
         }), 500
 
 
-@simulation_bp.route('/prepare/status', methods=['POST'])
+@simulation_bp.route('/prepare/status', methods=['GET', 'POST'])
 def get_prepare_status():
     """
     Query preparation task progress
-    
+
     Support two query methods:
     1. Query via task_id to check ongoing task progress
     2. Check via simulation_id to verify if preparation is already completed
-    
-    Request (JSON):
+
+    Request (JSON or Query Params):
         {
             "task_id": "task_xxxx",          // Optional, from previous /prepare call
             "simulation_id": "sim_xxxx"      // Optional，Simulation ID（For checking completedPrepare）
         }
-    
+
     Returns:
         {
             "success": true,
@@ -715,6 +712,7 @@ def get_prepare_status():
                 "task_id": "task_xxxx",
                 "status": "processing|completed|ready",
                 "progress": 45,
+                "current_step": "...",
                 "message": "...",
                 "already_prepared": true|false,  // Is there completed preparation
                 "prepare_info": {...}            // Detailed information when preparation complete
@@ -722,82 +720,86 @@ def get_prepare_status():
         }
     """
     from ..models.task import TaskManager
-    
+
     try:
-        data = request.get_json() or {}
-        
-        task_id = data.get('task_id')
-        simulation_id = data.get('simulation_id')
-        
-        # If simulation_id is provided, check if preparation is complete
+        data = request.get_json(silent=True) or {}
+
+        task_id = request.args.get('task_id') or (data.get('task_id') if isinstance(data, dict) else None)
+        simulation_id = request.args.get('simulation_id') or (data.get('simulation_id') if isinstance(data, dict) else None)
+
+        task_manager = TaskManager()
+        task = task_manager.get_task(task_id) if task_id else None
+
+        # 1. When task_id is supplied and task exists, prioritize returning task status FIRST
+        if task:
+            task_dict = task.to_dict()
+            task_dict["already_prepared"] = False
+            if simulation_id and "simulation_id" not in task_dict:
+                task_dict["simulation_id"] = simulation_id
+
+            # Ensure progress, current_step, status, message are available
+            current_step = (
+                task.progress_detail.get("current_stage_name")
+                or task.progress_detail.get("current_stage")
+                or task.progress_detail.get("current_step")
+                or ""
+            )
+            task_dict["current_step"] = current_step
+            return jsonify({
+                "success": True,
+                "data": task_dict
+            })
+
+        # 2. Fall back to _check_simulation_prepared(simulation_id) only if task_id is not provided or task is None
         if simulation_id:
             is_prepared, prepare_info = _check_simulation_prepared(simulation_id)
             if is_prepared:
+                resp_data = {
+                    "simulation_id": simulation_id,
+                    "status": "ready",
+                    "progress": 100,
+                    "message": "Preparation already completed" if not task_id else "Task complete（PrepareWork already exists）",
+                    "already_prepared": True,
+                    "prepare_info": prepare_info
+                }
+                if task_id:
+                    resp_data["task_id"] = task_id
                 return jsonify({
                     "success": True,
-                    "data": {
-                        "simulation_id": simulation_id,
-                        "status": "ready",
-                        "progress": 100,
-                        "message": "Preparation already completed",
-                        "already_prepared": True,
-                        "prepare_info": prepare_info
-                    }
+                    "data": resp_data
                 })
-        
-        # If no task_id，ReturnError
-        if not task_id:
-            if simulation_id:
-                # Have simulation_idBut notPreparation complete
+            elif not task_id:
+                # Simulation exists but not prepared, and no task_id provided
+                status_to_report = "preparing" if prepare_info == "preparing" else "not_started"
+                msg = (
+                    "Preparation is in progress"
+                    if prepare_info == "preparing"
+                    else "Preparation not started yet, please call /api/simulation/prepare"
+                )
                 return jsonify({
                     "success": True,
                     "data": {
                         "simulation_id": simulation_id,
-                        "status": "not_started",
+                        "status": status_to_report,
                         "progress": 0,
-                        "message": "Preparation not started yet, please call /api/simulation/prepare",
+                        "message": msg,
                         "already_prepared": False
                     }
                 })
-            return jsonify({
-                "success": False,
-                "error": "Please provide task_id Or simulation_id"
-            }), 400
-        
-        task_manager = TaskManager()
-        task = task_manager.get_task(task_id)
-        
-        if not task:
-            # Task does not exist, but if simulation_id is provided, check if preparation is complete
-            if simulation_id:
-                is_prepared, prepare_info = _check_simulation_prepared(simulation_id)
-                if is_prepared:
-                    return jsonify({
-                        "success": True,
-                        "data": {
-                            "simulation_id": simulation_id,
-                            "task_id": task_id,
-                            "status": "ready",
-                            "progress": 100,
-                            "message": "Task complete（PrepareWork already exists）",
-                            "already_prepared": True,
-                            "prepare_info": prepare_info
-                        }
-                    })
-            
+
+        # 3. If task_id was provided but task was not found (and simulation not prepared)
+        if task_id:
             return jsonify({
                 "success": False,
                 "error": f"Task does not exist: {task_id}"
             }), 404
-        
-        task_dict = task.to_dict()
-        task_dict["already_prepared"] = False
-        
+
+        # 4. Neither task_id nor simulation_id provided
         return jsonify({
-            "success": True,
-            "data": task_dict
-        })
-        
+            "success": False,
+            "error": "Please provide task_id Or simulation_id"
+        }), 400
+
     except Exception as e:
         logger.error(f"Failed to query task status: {str(e)}")
         return jsonify({

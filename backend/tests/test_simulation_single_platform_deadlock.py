@@ -231,11 +231,11 @@ class TestCheckSimulationPrepared:
         assert is_prepared is True
         assert info["status"] == status
 
-    def test_preparing_status_auto_updates_to_ready(self, test_sim_dir):
-        """Status 'preparing' with generated files auto-updates to 'ready'."""
+    def test_preparing_status_never_auto_updates_to_ready(self, test_sim_dir):
+        """Status 'preparing' must return (False, 'preparing') and never auto-update to 'ready'."""
         sim_id = _create_sim(
             test_sim_dir,
-            "sim_preparing_autoupdate",
+            "sim_preparing_no_autoupdate",
             enable_twitter=True,
             enable_reddit=False,
             status="preparing",
@@ -243,14 +243,14 @@ class TestCheckSimulationPrepared:
         )
 
         is_prepared, info = _check_simulation_prepared(sim_id)
-        assert is_prepared is True
-        assert info["status"] == "ready"
+        assert is_prepared is False
+        assert info == "preparing"
 
-        # Check persisted file updated
+        # Check persisted file not updated to ready
         state_file = os.path.join(test_sim_dir, sim_id, "state.json")
         with open(state_file, "r", encoding="utf-8") as f:
             persisted = json.load(f)
-        assert persisted["status"] == "ready"
+        assert persisted["status"] == "preparing"
 
     def test_unprepared_status_created_returns_false(self, test_sim_dir):
         """Status 'created' returns False even if files exist."""
