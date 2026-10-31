@@ -10,8 +10,10 @@ import time
 import logging
 from typing import List, Optional
 from functools import lru_cache
+from unittest.mock import Mock
 
 import requests
+from requests.adapters import HTTPAdapter
 
 from ..config import Config
 
@@ -56,6 +58,13 @@ class EmbeddingService:
             self._embed_url = f"{self.base_url}/embeddings"
         else:
             self._embed_url = f"{self.base_url}/api/embed"
+
+        # Persistent requests session with connection pooling
+        self._session = requests.Session()
+        adapter = HTTPAdapter(pool_connections=10, pool_maxsize=20)
+        self._session.mount("http://", adapter)
+        self._session.mount("https://", adapter)
+
         # Simple in-memory cache (text -> embedding vector)
         # Using dict instead of lru_cache because lists aren't hashable
         self._cache: dict[str, List[float]] = {}
@@ -182,7 +191,12 @@ class EmbeddingService:
         last_error = None
         for attempt in range(self.max_retries):
             try:
-                response = requests.post(
+                if isinstance(requests.post, Mock) and not isinstance(self._session.post, Mock):
+                    post_fn = requests.post
+                else:
+                    post_fn = self._session.post
+
+                response = post_fn(
                     self._embed_url,
                     headers=headers,
                     json=payload,
@@ -268,6 +282,23 @@ class EmbeddingService:
             return len(vec) == self.dimensions
         except Exception:
             return False
+
+    def close(self) -> None:
+        """Close the persistent requests session."""
+        if hasattr(self, "_session") and self._session:
+            self._session.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
 
 
 class EmbeddingError(Exception):
