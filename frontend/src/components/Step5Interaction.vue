@@ -553,8 +553,9 @@ const formatTime = (timestamp) => {
 
 const renderMarkdown = (content) => {
   if (!content) return ''
-  
-  let processedContent = content.replace(/^##\s+.+\n+/, '')
+  const str = typeof content === 'string' ? content : JSON.stringify(content)
+
+  let processedContent = str.replace(/^##\s+.+\n+/, '')
   let html = processedContent.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre class="code-block"><code>$2</code></pre>')
   html = html.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>')
   html = html.replace(/^#### (.+)$/gm, '<h5 class="md-h5">$1</h5>')
@@ -695,9 +696,13 @@ const sendToReportAgent = async (message) => {
   })
 
   if (res.success && res.data) {
+    const respContent = typeof res.data?.response === 'string'
+      ? res.data.response
+      : (res.data?.response?.response || res.data?.answer || '')
+
     chatHistory.value.push({
       role: 'assistant',
-      content: res.data.response || res.data.answer || 'No response',
+      content: typeof respContent === 'string' ? respContent : JSON.stringify(respContent),
       timestamp: new Date().toISOString()
     })
     addLog('Report Agent replied')
