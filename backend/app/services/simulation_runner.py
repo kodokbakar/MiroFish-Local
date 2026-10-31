@@ -12,11 +12,14 @@ import threading
 import subprocess
 import signal
 import atexit
-from typing import Dict, Any, List, Optional, Union
+from typing import Dict, Any, List, Optional, Union, TYPE_CHECKING
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from queue import Queue
+
+if TYPE_CHECKING:
+    from ..storage.graph_storage import GraphStorage
 
 from ..config import Config
 from ..utils.logger import get_logger
@@ -321,7 +324,7 @@ class SimulationRunner:
         max_rounds: int = None,  # Maximum simulation rounds (optional, for truncating long simulations)
         enable_graph_memory_update: bool = False,  # Whether to update activities to the graph
         graph_id: str = None,  # Graph ID (required when enabling graph updates)
-        storage: 'GraphStorage' = None  # GraphStorage instance (required if enable_graph_memory_update)
+        storage: Optional["GraphStorage"] = None  # GraphStorage instance (required if enable_graph_memory_update)
     ) -> SimulationRunState:
         """
         Start simulation

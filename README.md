@@ -100,6 +100,7 @@ uv run python run.py
 # Or using standard pip:
 pip install -r requirements.txt
 python run.py
+```
 
 **4. Run frontend**
 

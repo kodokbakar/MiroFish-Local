@@ -12,7 +12,7 @@ OASIS), and record modifications.
 - Graph memory: Neo4j 5.15 CE behind the abstract `GraphStorage` interface.
 - LLM: OpenAI-compatible API. Embeddings are configured separately from the LLM.
 - Frontend: Vue (`frontend/`).
-- Tests: TODO set exact command. Lint: TODO set exact command.
+- Tests: `cd backend && uv run pytest` (596 tests pass offline). Lint: `cd backend && uv run ruff check app/ tests/`.
 
 ## Hard rules
 - Never reintroduce Zep Cloud or DashScope-specific code. Adapt to `GraphStorage`.

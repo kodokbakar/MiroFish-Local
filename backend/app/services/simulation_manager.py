@@ -8,10 +8,13 @@ import os
 import json
 import csv
 import shutil
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Callable, TYPE_CHECKING
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+
+if TYPE_CHECKING:
+    from ..storage.graph_storage import GraphStorage
 
 from ..config import Config
 from ..utils.logger import get_logger
@@ -247,9 +250,9 @@ class SimulationManager:
         document_text: str,
         defined_entity_types: Optional[List[str]] = None,
         use_llm_for_profiles: bool = True,
-        progress_callback: Optional[callable] = None,
+        progress_callback: Optional[Callable] = None,
         parallel_profile_count: int = 3,
-        storage: 'GraphStorage' = None,
+        storage: Optional["GraphStorage"] = None,
     ) -> SimulationState:
         """
         Prepare simulation environment (fully automated)
