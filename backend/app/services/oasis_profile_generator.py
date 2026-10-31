@@ -366,55 +366,56 @@ class OasisProfileGenerator:
         comprehensive_query = f"All information, activities, events, relationships and background about {entity_name}"
 
         try:
-            # Search edges (facts)
-            edge_results = self.storage.search(
+            # Unified search (edges and nodes)
+            results = self.storage.search(
                 graph_id=self.graph_id,
                 query=comprehensive_query,
                 limit=30,
-                scope="edges"
+                scope="both"
             )
+            edge_results = results.get("edges", []) if isinstance(results, dict) else []
+            node_results = results.get("nodes", []) if isinstance(results, dict) else []
 
             all_facts = set()
-            if isinstance(edge_results, dict) and 'edges' in edge_results:
-                for edge in edge_results['edges']:
-                    fact = edge.get('fact', '')
-                    if fact:
-                        all_facts.add(fact)
-            results["facts"] = list(all_facts)
-
-            # Search nodes (entity summaries)
-            node_results = self.storage.search(
-                graph_id=self.graph_id,
-                query=comprehensive_query,
-                limit=20,
-                scope="nodes"
-            )
+            for edge in edge_results:
+                fact = edge.get('fact', '')
+                if fact:
+                    all_facts.add(fact)
 
             all_summaries = set()
-            if isinstance(node_results, dict) and 'nodes' in node_results:
-                for node in node_results['nodes']:
-                    summary = node.get('summary', '')
-                    if summary:
-                        all_summaries.add(summary)
-                    name = node.get('name', '')
-                    if name and name != entity_name:
-                        all_summaries.add(f"Related Entity: {name}")
-            results["node_summaries"] = list(all_summaries)
+            for node in node_results:
+                summary = node.get('summary', '')
+                if summary:
+                    all_summaries.add(summary)
+                name = node.get('name', '')
+                if name and name != entity_name:
+                    all_summaries.add(f"Related Entity: {name}")
 
             # Build combined context
             context_parts = []
-            if results["facts"]:
-                context_parts.append("Fact Information:\n" + "\n".join(f"- {f}" for f in results["facts"][:20]))
-            if results["node_summaries"]:
-                context_parts.append("Related Entities:\n" + "\n".join(f"- {s}" for s in results["node_summaries"][:10]))
-            results["context"] = "\n\n".join(context_parts)
+            facts_list = list(all_facts)
+            summaries_list = list(all_summaries)
+            if facts_list:
+                context_parts.append("Fact Information:\n" + "\n".join(f"- {f}" for f in facts_list[:20]))
+            if summaries_list:
+                context_parts.append("Related Entities:\n" + "\n".join(f"- {s}" for s in summaries_list[:10]))
+            context_str = "\n\n".join(context_parts)
 
-            logger.info(f"Knowledge graph hybrid search completed: {entity_name}, retrieved {len(results['facts'])} facts, {len(results['node_summaries'])} related nodes")
+            logger.info(f"Knowledge graph hybrid search completed: {entity_name}, retrieved {len(facts_list)} facts, {len(summaries_list)} related nodes")
+
+            return {
+                "facts": facts_list,
+                "node_summaries": summaries_list,
+                "context": context_str,
+            }
 
         except Exception as e:
             logger.warning(f"Knowledge graph search failed ({entity_name}): {e}")
-
-        return results
+            return {
+                "facts": [],
+                "node_summaries": [],
+                "context": "",
+            }
     
     def _build_entity_context(self, entity: EntityNode) -> str:
         """
@@ -891,14 +892,22 @@ Important:
         profiles = [None] * total  # Pre-allocate list to maintain order
         completed_count = [0]  # Use list for modification in closure
         lock = Lock()
+        last_save_time = [0.0]
+        last_save_count = [0]
 
         # Helper function for real-time file writing
-        def save_profiles_realtime():
-            """Real-time save generated profiles to file"""
+        def save_profiles_realtime(force: bool = False):
+            """Real-time save generated profiles to file (throttled/batched)"""
             if not realtime_output_path:
                 return
 
             with lock:
+                now = time.time()
+                if not force:
+                    # Write at most once every 3 seconds or every 10 completions
+                    if (completed_count[0] - last_save_count[0] < 10) and (now - last_save_time[0] < 3.0):
+                        return
+
                 # Filter generated profiles
                 existing_profiles = [p for p in profiles if p is not None]
                 if not existing_profiles:
@@ -906,6 +915,8 @@ Important:
 
                 try:
                     self.save_profiles(existing_profiles, realtime_output_path, platform=output_platform)
+                    last_save_time[0] = now
+                    last_save_count[0] = completed_count[0]
                 except Exception as e:
                     logger.warning(f"Real-time profile save failed: {e}")
         
@@ -946,56 +957,59 @@ Important:
         print(f"{'='*60}\n")
         
         # Use thread pool for parallel execution
-        with concurrent.futures.ThreadPoolExecutor(max_workers=parallel_count) as executor:
-            # Submit all tasks
-            future_to_entity = {
-                executor.submit(generate_single_profile, idx, entity): (idx, entity)
-                for idx, entity in enumerate(entities)
-            }
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=parallel_count) as executor:
+                # Submit all tasks
+                future_to_entity = {
+                    executor.submit(generate_single_profile, idx, entity): (idx, entity)
+                    for idx, entity in enumerate(entities)
+                }
 
-            # Collect results
-            for future in concurrent.futures.as_completed(future_to_entity):
-                idx, entity = future_to_entity[future]
-                entity_type = entity.get_entity_type() or "Entity"
+                # Collect results
+                for future in concurrent.futures.as_completed(future_to_entity):
+                    idx, entity = future_to_entity[future]
+                    entity_type = entity.get_entity_type() or "Entity"
 
-                try:
-                    result_idx, profile, error = future.result()
-                    profiles[result_idx] = profile
+                    try:
+                        result_idx, profile, error = future.result()
+                        profiles[result_idx] = profile
 
-                    with lock:
-                        completed_count[0] += 1
-                        current = completed_count[0]
+                        with lock:
+                            completed_count[0] += 1
+                            current = completed_count[0]
 
-                    # Real-time file writing
-                    save_profiles_realtime()
+                        # Real-time file writing
+                        save_profiles_realtime()
 
-                    if progress_callback:
-                        progress_callback(
-                            current,
-                            total,
-                            f"Completed {current}/{total}: {entity.name} ({entity_type})"
+                        if progress_callback:
+                            progress_callback(
+                                current,
+                                total,
+                                f"Completed {current}/{total}: {entity.name} ({entity_type})"
+                            )
+
+                        if error:
+                            logger.warning(f"[{current}/{total}] {entity.name} using fallback persona: {error}")
+                        else:
+                            logger.info(f"[{current}/{total}] Successfully generated persona: {entity.name} ({entity_type})")
+
+                    except Exception as e:
+                        logger.error(f"Exception occurred while processing entity {entity.name}: {str(e)}")
+                        with lock:
+                            completed_count[0] += 1
+                        profiles[idx] = OasisAgentProfile(
+                            user_id=idx,
+                            user_name=self._generate_username(entity.name),
+                            name=entity.name,
+                            bio=f"{entity_type}: {entity.name}",
+                            persona=entity.summary or "A participant in social discussions.",
+                            source_entity_uuid=entity.uuid,
+                            source_entity_type=entity_type,
                         )
-
-                    if error:
-                        logger.warning(f"[{current}/{total}] {entity.name} using fallback persona: {error}")
-                    else:
-                        logger.info(f"[{current}/{total}] Successfully generated persona: {entity.name} ({entity_type})")
-
-                except Exception as e:
-                    logger.error(f"Exception occurred while processing entity {entity.name}: {str(e)}")
-                    with lock:
-                        completed_count[0] += 1
-                    profiles[idx] = OasisAgentProfile(
-                        user_id=idx,
-                        user_name=self._generate_username(entity.name),
-                        name=entity.name,
-                        bio=f"{entity_type}: {entity.name}",
-                        persona=entity.summary or "A participant in social discussions.",
-                        source_entity_uuid=entity.uuid,
-                        source_entity_type=entity_type,
-                    )
-                    # Real-time file writing (even for fallback personas)
-                    save_profiles_realtime()
+                        # Real-time file writing (even for fallback personas)
+                        save_profiles_realtime()
+        finally:
+            save_profiles_realtime(force=True)
 
         print(f"\n{'='*60}")
         print(f"Persona generation complete! Generated {len([p for p in profiles if p])} agents")

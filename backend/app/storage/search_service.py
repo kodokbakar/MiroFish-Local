@@ -16,30 +16,68 @@ from .neo4j_records import edge_to_dict, node_to_dict
 logger = logging.getLogger('mirofish.search')
 
 
-def _edge_result(record: Dict[str, Any]) -> Dict[str, Any]:
-    properties = dict(record["r"])
-    properties.pop("fact_embedding", None)
-    properties.pop("attributes_json", None)
-    return {
-        **properties,
-        **edge_to_dict(record["r"], record["src_uuid"], record["tgt_uuid"]),
-        "_score": record["score"],
-    }
+def _unpack_relationship(record: Any) -> Dict[str, Any]:
+    rec = dict(record)
+    score = rec.get("score", 0.0)
+    if "r" in rec:
+        properties = dict(rec["r"])
+        properties.pop("fact_embedding", None)
+        properties.pop("attributes_json", None)
+        return {
+            **properties,
+            **edge_to_dict(rec["r"], rec.get("src_uuid", ""), rec.get("tgt_uuid", "")),
+            "_score": score,
+        }
+
+    props = {k: v for k, v in rec.items() if k not in ("fact_embedding", "attributes_json", "score")}
+    src_uuid = rec.get("src_uuid", "")
+    tgt_uuid = rec.get("tgt_uuid", "")
+    props["uuid"] = rec.get("uuid", "")
+    props["name"] = rec.get("name", "")
+    props["fact"] = rec.get("fact", "")
+    props["source_node_uuid"] = src_uuid
+    props["target_node_uuid"] = tgt_uuid
+    props.setdefault("attributes", {})
+    props["_score"] = score
+    return props
 
 
-def _node_result(record: Dict[str, Any]) -> Dict[str, Any]:
-    properties = dict(record["n"])
-    for field in ("embedding", "name_lower", "attributes_json"):
-        properties.pop(field, None)
-    return {**properties, **node_to_dict(record["n"], record["labels"]), "_score": record["score"]}
+_edge_result = _unpack_relationship
+
+
+def _unpack_node(record: Any) -> Dict[str, Any]:
+    rec = dict(record)
+    score = rec.get("score", 0.0)
+    if "n" in rec:
+        properties = dict(rec["n"])
+        for field in ("embedding", "name_lower", "attributes_json"):
+            properties.pop(field, None)
+        return {**properties, **node_to_dict(rec["n"], rec.get("labels", [])), "_score": score}
+
+    props = {k: v for k, v in rec.items() if k not in ("embedding", "name_lower", "attributes_json", "score")}
+    labels = rec.get("labels", [])
+    clean_labels = [label for label in labels if label != "Entity"] if labels else []
+    props["uuid"] = rec.get("uuid", "")
+    props["name"] = rec.get("name", "")
+    props["summary"] = rec.get("summary", "")
+    props["labels"] = clean_labels
+    props.setdefault("attributes", {})
+    props["_score"] = score
+    return props
+
+
+_node_result = _unpack_node
 
 # Cypher for vector search on edges (facts)
 _VECTOR_SEARCH_EDGES = """
 CALL db.index.vector.queryRelationships('fact_embedding', $limit, $query_vector)
 YIELD relationship, score
 WHERE relationship.graph_id = $graph_id
-RETURN relationship AS r, startNode(relationship).uuid AS src_uuid,
-       endNode(relationship).uuid AS tgt_uuid, score
+WITH relationship AS r, score
+// startNode(relationship).uuid AS src_uuid, endNode(relationship).uuid AS tgt_uuid
+RETURN r.uuid AS uuid, r.name AS name, r.fact AS fact,
+       startNode(r).uuid AS src_uuid,
+       endNode(r).uuid AS tgt_uuid, score
 ORDER BY score DESC
 LIMIT $limit
 """
@@ -49,7 +87,9 @@ _VECTOR_SEARCH_NODES = """
 CALL db.index.vector.queryNodes('entity_embedding', $limit, $query_vector)
 YIELD node, score
 WHERE node.graph_id = $graph_id
-RETURN node AS n, labels(node) AS labels, score
+WITH node AS n, score
+// labels(node) AS labels
+RETURN n.uuid AS uuid, n.name AS name, n.summary AS summary, labels(n) AS labels, score
 ORDER BY score DESC
 LIMIT $limit
 """
@@ -59,8 +99,11 @@ _FULLTEXT_SEARCH_EDGES = """
 CALL db.index.fulltext.queryRelationships('fact_fulltext', $query_text)
 YIELD relationship, score
 WHERE relationship.graph_id = $graph_id
-RETURN relationship AS r, startNode(relationship).uuid AS src_uuid,
-       endNode(relationship).uuid AS tgt_uuid, score
+WITH relationship AS r, score
+// startNode(relationship).uuid AS src_uuid, endNode(relationship).uuid AS tgt_uuid
+RETURN r.uuid AS uuid, r.name AS name, r.fact AS fact,
+       startNode(r).uuid AS src_uuid,
+       endNode(r).uuid AS tgt_uuid, score
 ORDER BY score DESC
 LIMIT $limit
 """
@@ -70,7 +113,9 @@ _FULLTEXT_SEARCH_NODES = """
 CALL db.index.fulltext.queryNodes('entity_fulltext', $query_text)
 YIELD node, score
 WHERE node.graph_id = $graph_id
-RETURN node AS n, labels(node) AS labels, score
+WITH node AS n, score
+// labels(node) AS labels
+RETURN n.uuid AS uuid, n.name AS name, n.summary AS summary, labels(n) AS labels, score
 ORDER BY score DESC
 LIMIT $limit
 """
@@ -154,7 +199,7 @@ class SearchService:
                 limit=limit,
             )
             return [
-                _edge_result(record)
+                _unpack_relationship(record)
                 for record in result
             ]
         except Exception as e:
@@ -175,7 +220,7 @@ class SearchService:
                 limit=limit,
             )
             return [
-                _edge_result(record)
+                _unpack_relationship(record)
                 for record in result
             ]
         except Exception as e:
@@ -194,7 +239,7 @@ class SearchService:
                 limit=limit,
             )
             return [
-                _node_result(record)
+                _unpack_node(record)
                 for record in result
             ]
         except Exception as e:
@@ -214,7 +259,7 @@ class SearchService:
                 limit=limit,
             )
             return [
-                _node_result(record)
+                _unpack_node(record)
                 for record in result
             ]
         except Exception as e:
