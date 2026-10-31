@@ -1755,7 +1755,7 @@ const displayLogs = computed(() => {
 
 // Workflow steps overview (status-based, no nested cards)
 const activeSectionIndex = computed(() => {
-  if (isComplete.value) return null
+  if (isComplete.value || hasError.value) return null
   if (currentSectionIndex.value) return currentSectionIndex.value
   if (totalSections.value > 0 && completedSections.value < totalSections.value) return completedSections.value + 1
   return null
@@ -2061,7 +2061,7 @@ const fetchAgentLog = async () => {
             hasError.value = true
             errorMessage.value = log.details?.message || log.details?.error || 'Report generation failed'
             currentSectionIndex.value = null
-            emit('update-status', 'failed')
+            emit('update-status', 'error')
             stopPolling()
           }
 
@@ -2812,6 +2812,12 @@ watch(() => props.reportId, (newId) => {
   background: #ECFDF5;
   border-color: #A7F3D0;
   color: #065F46;
+}
+
+.metric-pill.pill--failed {
+  color: #991B1B;
+  background: #FEF2F2;
+  border: 1px solid #FECACA;
 }
 
 .metric-pill.pill--pending {
