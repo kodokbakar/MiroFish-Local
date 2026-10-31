@@ -131,6 +131,9 @@ class SimulationRunState:
     # Round summary
     rounds: List[RoundSummary] = field(default_factory=list)
 
+    # Actions list
+    actions: List[AgentAction] = field(default_factory=list)
+
     # Recent actions (for frontend real-time display)
     recent_actions: List[AgentAction] = field(default_factory=list)
     max_recent_actions: int = 50
@@ -145,13 +148,15 @@ class SimulationRunState:
 
     # Process ID (for stopping)
     process_pid: Optional[int] = None
-    
+
     def add_action(self, action: AgentAction):
         """Add action to recent actions list"""
         self.recent_actions.insert(0, action)
         if len(self.recent_actions) > self.max_recent_actions:
             self.recent_actions = self.recent_actions[:self.max_recent_actions]
-        
+        if hasattr(self, "actions") and isinstance(self.actions, list):
+            self.actions.append(action)
+
         if action.platform == "twitter":
             self.twitter_actions_count += 1
         else:
@@ -732,35 +737,46 @@ class SimulationRunner:
             New read position
         """
         # Check if graph memory update is enabled
-        graph_memory_enabled = cls._graph_memory_enabled.get(state.simulation_id, False)
+        sim_id = getattr(state, "simulation_id", "")
+        graph_memory_enabled = cls._graph_memory_enabled.get(sim_id, False) if sim_id else False
         graph_updater = None
-        if graph_memory_enabled:
-            graph_updater = GraphMemoryManager.get_updater(state.simulation_id)
-        
+        if graph_memory_enabled and sim_id:
+            graph_updater = GraphMemoryManager.get_updater(sim_id)
+
+        last_valid_offset = position
         try:
             with open(log_path, 'r', encoding='utf-8') as f:
                 f.seek(position)
-                for line in f:
+                while True:
+                    line_start = f.tell()
+                    line = f.readline()
+                    if not line:
+                        break
+                    if not line.endswith('\n'):
+                        f.seek(line_start)
+                        break
+                    last_valid_offset = f.tell()
+
                     line = line.strip()
                     if line:
                         try:
                             action_data = json.loads(line)
-                            
+
                             # Handle event type entries
                             if "event_type" in action_data:
                                 event_type = action_data.get("event_type")
-                                
+
                                 # Detect simulation_end event, mark platform completed
                                 if event_type == "simulation_end":
                                     if platform == "twitter":
                                         state.twitter_completed = True
                                         state.twitter_running = False
-                                        logger.info(f"Twitter simulation completed: {state.simulation_id}, total_rounds={action_data.get('total_rounds')}, total_actions={action_data.get('total_actions')}")
+                                        logger.info(f"Twitter simulation completed: {getattr(state, 'simulation_id', '')}, total_rounds={action_data.get('total_rounds')}, total_actions={action_data.get('total_actions')}")
                                     elif platform == "reddit":
                                         state.reddit_completed = True
                                         state.reddit_running = False
-                                        logger.info(f"Reddit simulation completed: {state.simulation_id}, total_rounds={action_data.get('total_rounds')}, total_actions={action_data.get('total_actions')}")
-                                    
+                                        logger.info(f"Reddit simulation completed: {getattr(state, 'simulation_id', '')}, total_rounds={action_data.get('total_rounds')}, total_actions={action_data.get('total_actions')}")
+
                                     # Check if all enabled platforms are completed
                                     # If only one platform is running, check only that platform
                                     # If both platforms are running, need both to complete
@@ -768,13 +784,13 @@ class SimulationRunner:
                                     if all_completed:
                                         state.runner_status = RunnerStatus.COMPLETED
                                         state.completed_at = datetime.now().isoformat()
-                                        logger.info(f"All platform simulations completed: {state.simulation_id}")
-                                
+                                        logger.info(f"All platform simulations completed: {getattr(state, 'simulation_id', '')}")
+
                                 # Update round information (from round_end event)
                                 elif event_type == "round_end":
                                     round_num = action_data.get("round", 0)
                                     simulated_hours = action_data.get("simulated_hours", 0)
-                                    
+
                                     # Update per-platform independent rounds and time
                                     if platform == "twitter":
                                         if round_num > state.twitter_current_round:
@@ -784,15 +800,15 @@ class SimulationRunner:
                                         if round_num > state.reddit_current_round:
                                             state.reddit_current_round = round_num
                                         state.reddit_simulated_hours = simulated_hours
-                                    
+
                                     # Overall rounds take maximum of both platforms
                                     if round_num > state.current_round:
                                         state.current_round = round_num
                                     # Overall time takes maximum of both platforms
                                     state.simulated_hours = max(state.twitter_simulated_hours, state.reddit_simulated_hours)
-                                
+
                                 continue
-                            
+
                             action = AgentAction(
                                 round_num=action_data.get("round", 0),
                                 timestamp=action_data.get("timestamp", datetime.now().isoformat()),
@@ -804,29 +820,35 @@ class SimulationRunner:
                                 result=action_data.get("result"),
                                 success=action_data.get("success", True),
                             )
-                            state.add_action(action)
+                            if hasattr(state, "add_action") and callable(state.add_action):
+                                state.add_action(action)
+                            elif hasattr(state, "actions") and isinstance(state.actions, list):
+                                state.actions.append(action)
+
+                            if hasattr(state, "actions") and isinstance(state.actions, list) and action not in state.actions:
+                                state.actions.append(action)
 
                             # Incrementally cache parsed action
-                            sim_id = getattr(state, "simulation_id", str(state))
+                            cache_sim_id = getattr(state, "simulation_id", str(state))
                             with cls._action_cache_lock:
-                                if sim_id not in cls._action_cache:
-                                    cls._action_cache[sim_id] = []
-                                cls._action_cache[sim_id].append(action)
+                                if cache_sim_id not in cls._action_cache:
+                                    cls._action_cache[cache_sim_id] = []
+                                cls._action_cache[cache_sim_id].append(action)
 
                             # Update rounds
-                            if action.round_num and action.round_num > state.current_round:
+                            if action.round_num and hasattr(state, "current_round") and action.round_num > state.current_round:
                                 state.current_round = action.round_num
-                            
+
                             # If graph memory update enabled, send activity to graph
                             if graph_updater:
                                 graph_updater.add_activity_from_dict(action_data, platform)
-                            
+
                         except json.JSONDecodeError:
                             pass
-                return f.tell()
+                return last_valid_offset
         except Exception as e:
             logger.warning(f"Failed to read action log: {log_path}, error={e}")
-            return position
+            return last_valid_offset
     
     @classmethod
     def _check_all_platforms_completed(cls, state: SimulationRunState) -> bool:
