@@ -1939,10 +1939,23 @@ class ReportAgent:
                 "sources": [informationsource]
             }
         """
-        logger.info(f"Report Agentchat: {message[:50]}...")
-        
+        if not isinstance(message, str):
+            if isinstance(message, (dict, list)):
+                try:
+                    message_str = json.dumps(message, ensure_ascii=False)
+                except Exception:
+                    message_str = str(message)
+            elif message is None:
+                message_str = ""
+            else:
+                message_str = str(message)
+        else:
+            message_str = message
+
+        logger.info(f"Report Agentchat: {message_str[:50]}...")
+
         chat_history = chat_history or []
-        
+
         # GetalreadygenerateReportcontent
         report_content = ""
         try:
@@ -1954,7 +1967,7 @@ class ReportAgent:
                     report_content += "\n\n... [reportcontenthasTruncate] ..."
         except Exception as e:
             logger.warning(f"getreportcontentfailed: {e}")
-        
+
         system_prompt = CHAT_SYSTEM_PROMPT_TEMPLATE.format(
             simulation_requirement=self.simulation_requirement,
             report_content=report_content if report_content else "（nonereport）",
@@ -1963,15 +1976,33 @@ class ReportAgent:
 
         # Buildmessage
         messages = [{"role": "system", "content": system_prompt}]
-        
+
         # add historychat
         for h in chat_history[-10:]:  # limithistorylength
-            messages.append(h)
-        
+            if not isinstance(h, dict):
+                continue
+            role = str(h.get("role") or "user")
+            raw_content = h.get("content", "")
+            if isinstance(raw_content, str):
+                content_str = raw_content
+            elif isinstance(raw_content, (dict, list)):
+                try:
+                    content_str = json.dumps(raw_content, ensure_ascii=False)
+                except Exception:
+                    content_str = str(raw_content)
+            elif raw_content is None:
+                content_str = ""
+            else:
+                content_str = str(raw_content)
+            messages.append({
+                "role": role,
+                "content": content_str
+            })
+
         # add user message
         messages.append({
-            "role": "user", 
-            "content": message
+            "role": "user",
+            "content": message_str
         })
         
         # ReACT loop（simplified version）
