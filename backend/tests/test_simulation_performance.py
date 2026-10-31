@@ -337,3 +337,329 @@ def test_ipc_client_send_command_timeout(tmp_path):
 
     with pytest.raises(TimeoutError):
         client.send_command(CommandType.CLOSE_ENV, {}, timeout=0.1)
+
+
+def test_end_to_end_action_log_ingestion_multi_platform(clean_simulation_runner):
+    """End-to-end multi-platform action log streaming into state and in-memory cache."""
+    sim_id = "sim_e2e_ingestion"
+    sim_dir = os.path.join(clean_simulation_runner, sim_id)
+    tw_dir = os.path.join(sim_dir, "twitter")
+    rd_dir = os.path.join(sim_dir, "reddit")
+    os.makedirs(tw_dir, exist_ok=True)
+    os.makedirs(rd_dir, exist_ok=True)
+
+    tw_file = os.path.join(tw_dir, "actions.jsonl")
+    rd_file = os.path.join(rd_dir, "actions.jsonl")
+
+    state = SimulationRunState(simulation_id=sim_id, runner_status=RunnerStatus.RUNNING)
+    SimulationRunner._run_states[sim_id] = state
+    with SimulationRunner._action_cache_lock:
+        SimulationRunner._action_cache[sim_id] = []
+
+    # Stream batch 1: 2 actions on Twitter, 2 on Reddit
+    tw_actions_batch1 = [
+        {"round": 1, "timestamp": "2026-01-01T10:00:00", "agent_id": 1, "agent_name": "T1", "action_type": "POST"},
+        {"round": 2, "timestamp": "2026-01-01T10:02:00", "agent_id": 2, "agent_name": "T2", "action_type": "RETWEET"},
+    ]
+    with open(tw_file, "w") as f:
+        for a in tw_actions_batch1:
+            f.write(json.dumps(a) + "\n")
+
+    rd_actions_batch1 = [
+        {"round": 1, "timestamp": "2026-01-01T10:01:00", "agent_id": 10, "agent_name": "R1", "action_type": "POST"},
+        {"round": 2, "timestamp": "2026-01-01T10:03:00", "agent_id": 11, "agent_name": "R2", "action_type": "COMMENT"},
+    ]
+    with open(rd_file, "w") as f:
+        for a in rd_actions_batch1:
+            f.write(json.dumps(a) + "\n")
+
+    pos_tw = SimulationRunner._read_action_log(tw_file, 0, state, "twitter")
+    pos_rd = SimulationRunner._read_action_log(rd_file, 0, state, "reddit")
+
+    assert pos_tw > 0
+    assert pos_rd > 0
+    assert state.twitter_actions_count + state.reddit_actions_count == 4
+
+    # Query all actions from warm cache
+    with patch.object(SimulationRunner, "_read_actions_from_file") as mock_read:
+        all_actions = SimulationRunner.get_all_actions(sim_id)
+        mock_read.assert_not_called()
+        assert len(all_actions) == 4
+        # Verify newest-first ordering across platforms
+        assert [a.timestamp for a in all_actions] == [
+            "2026-01-01T10:03:00",
+            "2026-01-01T10:02:00",
+            "2026-01-01T10:01:00",
+            "2026-01-01T10:00:00",
+        ]
+
+    # Stream batch 2: 1 new action on Twitter
+    with open(tw_file, "a") as f:
+        f.write(json.dumps({"round": 3, "timestamp": "2026-01-01T10:05:00", "agent_id": 1, "agent_name": "T1", "action_type": "LIKE"}) + "\n")
+
+    pos_tw = SimulationRunner._read_action_log(tw_file, pos_tw, state, "twitter")
+    assert state.twitter_actions_count + state.reddit_actions_count == 5
+    assert state.current_round == 3
+
+    actions_r3 = SimulationRunner.get_all_actions(sim_id, round_num=3)
+    assert len(actions_r3) == 1
+    assert actions_r3[0].agent_id == 1
+    assert actions_r3[0].action_type == "LIKE"
+
+
+def test_concurrent_cache_reads_and_appends():
+    """Cache consistency across concurrent reader threads while actions are appended."""
+    sim_id = "sim_concurrent_reads"
+    initial_actions = [
+        AgentAction(round_num=1, timestamp=f"2026-01-01T10:{i:02d}:00", platform="twitter" if i % 2 == 0 else "reddit", agent_id=i, agent_name=f"A{i}", action_type="POST")
+        for i in range(20)
+    ]
+    with SimulationRunner._action_cache_lock:
+        SimulationRunner._action_cache[sim_id] = list(initial_actions)
+
+    stop_event = threading.Event()
+    errors = []
+
+    def reader_worker(worker_id):
+        try:
+            while not stop_event.is_set():
+                platform = "twitter" if worker_id % 2 == 0 else None
+                actions = SimulationRunner.get_all_actions(sim_id, platform=platform)
+                assert isinstance(actions, list)
+                assert len(actions) >= 10 if platform else len(actions) >= 20
+                for i in range(len(actions) - 1):
+                    assert actions[i].timestamp >= actions[i + 1].timestamp
+                if platform:
+                    assert all(a.platform == "twitter" for a in actions)
+        except Exception as e:
+            errors.append(e)
+
+    def writer_worker():
+        try:
+            for idx in range(20, 40):
+                new_act = AgentAction(
+                    round_num=2,
+                    timestamp=f"2026-01-01T11:{idx:02d}:00",
+                    platform="twitter" if idx % 2 == 0 else "reddit",
+                    agent_id=idx,
+                    agent_name=f"A{idx}",
+                    action_type="REPLY"
+                )
+                with SimulationRunner._action_cache_lock:
+                    SimulationRunner._action_cache[sim_id].append(new_act)
+                time.sleep(0.002)
+        except Exception as e:
+            errors.append(e)
+
+    threads = [threading.Thread(target=reader_worker, args=(i,)) for i in range(6)]
+    writer = threading.Thread(target=writer_worker)
+
+    for t in threads:
+        t.start()
+    writer.start()
+
+    writer.join()
+    time.sleep(0.05)
+    stop_event.set()
+    for t in threads:
+        t.join()
+
+    assert not errors, f"Encountered errors in concurrent cache test: {errors}"
+    final_actions = SimulationRunner.get_all_actions(sim_id)
+    assert len(final_actions) == 40
+
+
+def test_cold_cache_recovery_legacy_single_file_and_missing_dir(clean_simulation_runner):
+    """Cold-cache disk recovery with legacy single-file format, cache eviction, and empty dirs."""
+    # 1. Legacy single file actions.jsonl directly under sim_dir
+    legacy_id = "sim_legacy"
+    legacy_dir = os.path.join(clean_simulation_runner, legacy_id)
+    os.makedirs(legacy_dir, exist_ok=True)
+    legacy_file = os.path.join(legacy_dir, "actions.jsonl")
+    legacy_actions = [
+        {"round": 1, "timestamp": "2026-01-01T08:00:00", "platform": "twitter", "agent_id": 5, "agent_name": "L1", "action_type": "POST"},
+        {"round": 1, "timestamp": "2026-01-01T08:05:00", "platform": "reddit", "agent_id": 6, "agent_name": "L2", "action_type": "COMMENT"},
+    ]
+    with open(legacy_file, "w") as f:
+        for a in legacy_actions:
+            f.write(json.dumps(a) + "\n")
+
+    res_legacy = SimulationRunner.get_all_actions(legacy_id)
+    assert len(res_legacy) == 2
+    assert res_legacy[0].agent_id == 6
+    assert res_legacy[1].agent_id == 5
+
+    # 2. Mid-run eviction and recovery
+    with SimulationRunner._action_cache_lock:
+        SimulationRunner._action_cache.pop(legacy_id, None)
+
+    # Re-read without cache populated
+    res_rehydrated = SimulationRunner.get_all_actions(legacy_id)
+    assert len(res_rehydrated) == 2
+    assert res_rehydrated[0].timestamp == "2026-01-01T08:05:00"
+
+    # 3. Non-existent simulation ID returns empty list gracefully
+    empty_res = SimulationRunner.get_all_actions("sim_nonexistent")
+    assert empty_res == []
+
+
+def test_dirty_check_granular_fields_and_missing_file_recovery(clean_simulation_runner):
+    """Dirty-check isolates multi-simulations, detects field modifications, and recovers missing file."""
+    sim_a = "sim_a"
+    sim_b = "sim_b"
+    state_a = SimulationRunState(simulation_id=sim_a, runner_status=RunnerStatus.RUNNING, current_round=1)
+    state_b = SimulationRunState(simulation_id=sim_b, runner_status=RunnerStatus.RUNNING, current_round=1)
+
+    SimulationRunner._save_run_state(state_a)
+    SimulationRunner._save_run_state(state_b)
+
+    file_a = os.path.join(clean_simulation_runner, sim_a, "run_state.json")
+    file_b = os.path.join(clean_simulation_runner, sim_b, "run_state.json")
+    assert os.path.exists(file_a)
+    assert os.path.exists(file_b)
+
+    # Calling save on sim_a unchanged -> skipped
+    with patch("os.replace", wraps=os.replace) as spy_replace:
+        SimulationRunner._save_run_state(state_a)
+        assert spy_replace.call_count == 0
+
+    # Calling save on sim_b unchanged -> skipped
+    with patch("os.replace", wraps=os.replace) as spy_replace:
+        SimulationRunner._save_run_state(state_b)
+        assert spy_replace.call_count == 0
+
+    # Modify status in sim_a -> triggers write
+    state_a.runner_status = RunnerStatus.PAUSED
+    with patch("os.replace", wraps=os.replace) as spy_replace:
+        SimulationRunner._save_run_state(state_a)
+        assert spy_replace.call_count == 1
+
+    # Remove file_b externally: dirty check detects missing file and re-writes
+    os.remove(file_b)
+    assert not os.path.exists(file_b)
+    with patch("os.replace", wraps=os.replace) as spy_replace:
+        SimulationRunner._save_run_state(state_b)
+        assert spy_replace.call_count == 1
+    assert os.path.exists(file_b)
+
+    # Modify error in state_b -> triggers write
+    state_b.error = "sim error"
+    with patch("os.replace", wraps=os.replace) as spy_replace:
+        SimulationRunner._save_run_state(state_b)
+        assert spy_replace.call_count == 1
+
+
+def test_atomic_state_save_concurrency_and_cleanup(clean_simulation_runner):
+    """Concurrent atomic state saves never produce corrupt JSON or orphan tmp files."""
+    sim_id = "sim_concurrent_save"
+    state = SimulationRunState(simulation_id=sim_id, runner_status=RunnerStatus.RUNNING)
+    sim_dir = os.path.join(clean_simulation_runner, sim_id)
+    state_file = os.path.join(sim_dir, "run_state.json")
+
+    errors = []
+
+    def saver_worker(round_num):
+        try:
+            s = SimulationRunState(
+                simulation_id=sim_id,
+                runner_status=RunnerStatus.RUNNING,
+                current_round=round_num,
+                twitter_actions_count=round_num * 2,
+                reddit_actions_count=round_num * 3
+            )
+            SimulationRunner._save_run_state(s)
+            with open(state_file, "r") as f:
+                data = json.load(f)
+                assert isinstance(data, dict)
+                assert data["simulation_id"] == sim_id
+        except Exception as e:
+            errors.append(e)
+
+    threads = [threading.Thread(target=saver_worker, args=(r,)) for r in range(1, 21)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert not errors, f"Errors during concurrent save: {errors}"
+
+    # Verify no tmp files remain
+    tmp_files = [f for f in os.listdir(sim_dir) if f.endswith(".tmp")]
+    assert len(tmp_files) == 0
+
+    # Test error recovery and tmp file cleanup on failure
+    with patch("json.dump", side_effect=IOError("Simulated disk error")):
+        with pytest.raises(IOError, match="Simulated disk error"):
+            state.current_round = 999
+            SimulationRunner._save_run_state(state)
+
+    # Ensure no leftover tmp files
+    tmp_files = [f for f in os.listdir(sim_dir) if f.endswith(".tmp")]
+    assert len(tmp_files) == 0
+
+
+def test_ipc_rapid_sequential_and_concurrent_commands(tmp_path):
+    """SimulationIPCClient handles rapid sequential and concurrent commands with low latency."""
+    sim_dir = str(tmp_path / "sim_ipc_stress")
+    client = SimulationIPCClient(sim_dir)
+
+    stop_server = threading.Event()
+
+    def mock_ipc_server():
+        processed = set()
+        while not stop_server.is_set():
+            if os.path.exists(client.commands_dir):
+                for f_name in os.listdir(client.commands_dir):
+                    if f_name.endswith(".json") and f_name not in processed:
+                        cmd_path = os.path.join(client.commands_dir, f_name)
+                        try:
+                            with open(cmd_path, "r") as f:
+                                cmd_dict = json.load(f)
+                            cmd_id = cmd_dict["command_id"]
+                            resp = IPCResponse(
+                                command_id=cmd_id,
+                                status=CommandStatus.COMPLETED,
+                                result={"echo": cmd_dict.get("args", {})}
+                            )
+                            resp_path = os.path.join(client.responses_dir, f"{cmd_id}.json")
+                            with open(resp_path, "w") as f:
+                                json.dump(resp.to_dict(), f)
+                            processed.add(f_name)
+                        except (json.JSONDecodeError, FileNotFoundError):
+                            pass
+            time.sleep(0.01)
+
+    server_thread = threading.Thread(target=mock_ipc_server)
+    server_thread.start()
+
+    try:
+        # Rapid sequential commands: 5 commands should finish quickly (< 0.75s total)
+        t0 = time.perf_counter()
+        for i in range(5):
+            resp = client.send_command(CommandType.INTERVIEW, {"index": i}, timeout=2.0)
+            assert resp.status == CommandStatus.COMPLETED
+            assert resp.result == {"echo": {"index": i}}
+        elapsed_seq = time.perf_counter() - t0
+        assert elapsed_seq < 0.75, f"Sequential IPC took too long: {elapsed_seq:.3f}s"
+
+        # Concurrent command execution
+        concurrent_results = {}
+        def send_worker(worker_id):
+            client_instance = SimulationIPCClient(sim_dir)
+            resp = client_instance.send_command(CommandType.BATCH_INTERVIEW, {"worker": worker_id}, timeout=3.0)
+            concurrent_results[worker_id] = resp
+
+        threads = [threading.Thread(target=send_worker, args=(w,)) for w in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(concurrent_results) == 4
+        for w in range(4):
+            assert concurrent_results[w].status == CommandStatus.COMPLETED
+            assert concurrent_results[w].result == {"echo": {"worker": w}}
+    finally:
+        stop_server.set()
+        server_thread.join()
+
