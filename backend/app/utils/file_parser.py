@@ -161,7 +161,8 @@ class FileParser:
 def split_text_into_chunks(
     text: str,
     chunk_size: int = 500,
-    overlap: int = 50
+    overlap: int = 50,
+    chunk_overlap: Optional[int] = None
 ) -> List[str]:
     """
     Split text into chunks
@@ -170,10 +171,36 @@ def split_text_into_chunks(
         text: Original text
         chunk_size: Characters per chunk
         overlap: Overlapping characters
+        chunk_overlap: Optional alias for overlap
 
     Returns:
         List of text chunks
     """
+    if chunk_overlap is not None:
+        overlap = chunk_overlap
+
+    try:
+        if isinstance(chunk_size, bool):
+            chunk_size = 100
+        else:
+            chunk_size = int(chunk_size)
+    except (ValueError, TypeError):
+        chunk_size = 100
+
+    try:
+        if isinstance(overlap, bool):
+            overlap = 0
+        else:
+            overlap = int(overlap)
+    except (ValueError, TypeError):
+        overlap = 0
+
+    if chunk_size <= 0:
+        chunk_size = 100
+
+    if overlap >= chunk_size or overlap < 0:
+        overlap = max(0, min(overlap, chunk_size - 1))
+
     if len(text) <= chunk_size:
         return [text] if text.strip() else []
 
@@ -196,8 +223,9 @@ def split_text_into_chunks(
         if chunk:
             chunks.append(chunk)
 
-        # Next chunk starts at overlap position
-        start = end - overlap if end < len(text) else len(text)
+        # Next chunk starts at overlap position, ensuring strict forward progress
+        next_start = end - overlap if end < len(text) else len(text)
+        start = max(start + 1, next_start)
 
     return chunks
 
