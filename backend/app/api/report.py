@@ -342,6 +342,8 @@ def check_report_status(simulation_id: str):
 def get_agent_log(report_id: str):
     try:
         from_line = request.args.get('from_line', 0, type=int)
+        if from_line is None or from_line < 0:
+            from_line = 0
         log_data = ReportManager.get_agent_log(report_id, from_line=from_line)
         return jsonify({"success": True, "data": log_data})
     except Exception as e:
@@ -365,6 +367,8 @@ def stream_agent_log(report_id: str):
 def get_console_log(report_id: str):
     try:
         from_line = request.args.get('from_line', 0, type=int)
+        if from_line is None or from_line < 0:
+            from_line = 0
         log_data = ReportManager.get_console_log(report_id, from_line=from_line)
         return jsonify({"success": True, "data": log_data})
     except Exception as e:
