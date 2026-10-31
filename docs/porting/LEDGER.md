@@ -55,6 +55,7 @@ Only the orchestrator edits this file.
 | 036 | - | Issue #13: Eliminate O(N) full-log re-parsing storm and file-polling IPC bottlenecks in SimulationRunner | perf | direct | medium | ported | PR #46 (`de78abe`) | In-memory indexed action cache, incremental monitor updates, dirty-flag atomic state saves, low-latency IPC polling; 611 tests passed. |
 | 037 | - | Issue #14: Optimize ReACT Loop Context Budgeting, Early-Exit Policy, and Status Polling Disk I/O | perf | direct | medium | ported | PR #47 (`5b14397`) | Dynamic observation context budgeting, adaptive early-exit policy, in-memory report cache, incremental log polling; 631 tests passed. |
 | 038 | - | Issue #15: Resolve N+1 hybrid graph queries, O(N^2) profile disk serialization, and Bolt vector bloat in OASIS profile generator | perf | adapt | medium | ported | PR #48 (`6b8ecee`) | Unified scope=both search, linearized real-time profile persistence, Bolt property projection, requests.Session pooling; 617 tests passed. |
+| 039 | - | Issue #41: infinite polling timer and UI freeze on report generation failure in Step4Report | bugfix | direct | low | ported | PR #42 (`e781280`) | Handle backend report failure action, stop polling intervals, clear active section, and show error banner; 688 tests passed. |
 
 ## Skipped (with reason)
 | Upstream commit | Reason |
