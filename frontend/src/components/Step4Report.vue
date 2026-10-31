@@ -88,6 +88,7 @@
         <div v-if="hasError" class="report-error" role="alert">
           <strong>Report generation failed</strong>
           <span>{{ errorMessage }}</span>
+          <button type="button" class="retry-btn" @click="retryPolling">Retry Polling</button>
         </div>
 
         <!-- Workflow Overview (flat, status-based palette) -->
@@ -430,6 +431,10 @@ const collapsedSections = ref(new Set())
 const isComplete = ref(false)
 const hasError = ref(false)
 const errorMessage = ref('')
+const consecutiveErrors = ref(0)
+const MAX_CONSECUTIVE_ERRORS = 5
+let agentErrors = 0
+let consoleErrors = 0
 const startTime = ref(null)
 const leftPanel = ref(null)
 const rightPanel = ref(null)
@@ -2026,23 +2031,53 @@ const getLogLevelClass = (log) => {
 let agentLogTimer = null
 let consoleLogTimer = null
 
+const handlePollingError = (err, source) => {
+  console.warn(`Failed to fetch ${source}:`, err)
+  consecutiveErrors.value++
+  if (source === 'agent log') {
+    agentErrors++
+  } else {
+    consoleErrors++
+  }
+
+  if ((consecutiveErrors.value >= MAX_CONSECUTIVE_ERRORS || agentErrors >= MAX_CONSECUTIVE_ERRORS || consoleErrors >= MAX_CONSECUTIVE_ERRORS) && !hasError.value) {
+    hasError.value = true
+    errorMessage.value = 'Failed to fetch report logs after multiple attempts. Server may be unreachable.'
+    currentSectionIndex.value = null
+    emit('update-status', 'error')
+    stopPolling()
+    addLog('Report polling stopped: connection to server lost')
+  }
+}
+
+const retryPolling = () => {
+  hasError.value = false
+  errorMessage.value = ''
+  consecutiveErrors.value = 0
+  agentErrors = 0
+  consoleErrors = 0
+  startPolling()
+}
+
 const fetchAgentLog = async () => {
   if (!props.reportId) return
-  
+
   try {
     const res = await getAgentLog(props.reportId, agentLogLine.value)
-    
+
     if (res.success && res.data) {
+      consecutiveErrors.value = 0
+      agentErrors = 0
       const newLogs = res.data.logs || []
-      
+
       if (newLogs.length > 0) {
         newLogs.forEach(log => {
           agentLogs.value.push(log)
-          
+
           if (log.action === 'planning_complete' && log.details?.outline) {
             reportOutline.value = log.details.outline
           }
-          
+
           if (log.action === 'section_start') {
             currentSectionIndex.value = log.section_index
           }
@@ -2056,13 +2091,14 @@ const fetchAgentLog = async () => {
               currentSectionIndex.value = null
             }
           }
-          
+
           if (log.action === 'error') {
             hasError.value = true
             errorMessage.value = log.details?.message || log.details?.error || 'Report generation failed'
             currentSectionIndex.value = null
             emit('update-status', 'error')
             stopPolling()
+            addLog('Report generation failed: ' + errorMessage.value)
           }
 
           if (log.action === 'report_complete') {
@@ -2072,14 +2108,14 @@ const fetchAgentLog = async () => {
             stopPolling()
             // Scroll logic handled uniformly in nextTick after loop
           }
-          
+
           if (log.action === 'report_start') {
             startTime.value = new Date(log.timestamp)
           }
         })
-        
+
         agentLogLine.value = res.data.from_line + newLogs.length
-        
+
         nextTick(() => {
           if (rightPanel.value) {
             // If task complete, scroll to top; otherwise scroll to bottom to follow latest logs
@@ -2093,7 +2129,7 @@ const fetchAgentLog = async () => {
       }
     }
   } catch (err) {
-    console.warn('Failed to fetch agent log:', err)
+    handlePollingError(err, 'agent log')
   }
 }
 
@@ -2144,17 +2180,19 @@ const extractFinalContent = (response) => {
 
 const fetchConsoleLog = async () => {
   if (!props.reportId) return
-  
+
   try {
     const res = await getConsoleLog(props.reportId, consoleLogLine.value)
-    
+
     if (res.success && res.data) {
+      consecutiveErrors.value = 0
+      consoleErrors = 0
       const newLogs = res.data.logs || []
-      
+
       if (newLogs.length > 0) {
         consoleLogs.value.push(...newLogs)
         consoleLogLine.value = res.data.from_line + newLogs.length
-        
+
         nextTick(() => {
           if (logContent.value) {
             logContent.value.scrollTop = logContent.value.scrollHeight
@@ -2163,7 +2201,7 @@ const fetchConsoleLog = async () => {
       }
     }
   } catch (err) {
-    console.warn('Failed to fetch console log:', err)
+    handlePollingError(err, 'console log')
   }
 }
 
@@ -2215,8 +2253,11 @@ watch(() => props.reportId, (newId) => {
     isComplete.value = false
     hasError.value = false
     errorMessage.value = ''
+    consecutiveErrors.value = 0
+    agentErrors = 0
+    consoleErrors = 0
     startTime.value = null
-    
+
     startPolling()
   }
 }, { immediate: true })
@@ -2244,6 +2285,28 @@ watch(() => props.reportId, (newId) => {
   line-height: 1.5;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.retry-btn {
+  align-self: flex-start;
+  margin-top: 4px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #FFFFFF;
+  background: #DC2626;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.retry-btn:hover {
+  background: #B91C1C;
+}
+
+.retry-btn:active {
+  background: #991B1B;
 }
 
 .report-panel {
