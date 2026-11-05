@@ -8,9 +8,12 @@ const htmlEntities = Object.freeze({
 
 const escapeHtml = (content) => String(content).replace(/[&<>"']/g, (character) => htmlEntities[character])
 
-export const renderAnswerText = (content) => escapeHtml(content)
-  .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-  .replace(/\n/g, '<br>')
+export const renderAnswerText = (content) => {
+  if (!content) return ''
+  return escapeHtml(content)
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\n/g, '<br>')
+}
 
 export const renderMarkdown = (content) => {
   if (!content) return ''
@@ -24,7 +27,7 @@ export const renderMarkdown = (content) => {
   html = html.replace(/^### (.+)$/gm, '<h4 class="md-h4">$1</h4>')
   html = html.replace(/^## (.+)$/gm, '<h3 class="md-h3">$1</h3>')
   html = html.replace(/^# (.+)$/gm, '<h2 class="md-h2">$1</h2>')
-  html = html.replace(/^> (.+)$/gm, '<blockquote class="md-quote">$1</blockquote>')
+  html = html.replace(/^(?:>|&gt;)\s*(.+)$/gm, '<blockquote class="md-quote">$1</blockquote>')
 
   html = html.replace(/^(\s*)- (.+)$/gm, (match, indent, text) => {
     const level = Math.floor(indent.length / 2)

@@ -37,6 +37,18 @@ test('keeps untrusted HTML inert in interview answers while preserving formattin
   assert.equal(container.textContent, `${payload}answer`)
 })
 
+test('renders blockquotes after escaping Markdown input', () => {
+  const container = parseHtml(renderMarkdown('> This is a quote'))
+
+  assert.equal(container.querySelector('blockquote.md-quote')?.textContent, 'This is a quote')
+  assert.equal(container.querySelector('p.md-p'), null)
+})
+
+test('returns an empty answer for nullish content', () => {
+  assert.equal(renderAnswerText(null), '')
+  assert.equal(renderAnswerText(undefined), '')
+})
+
 test('preserves headings, emphasis, lists, and inline code', () => {
   const container = parseHtml(renderMarkdown('# Heading\n\n**bold** and *italic*\n\n- item\n\n`code`'))
 
