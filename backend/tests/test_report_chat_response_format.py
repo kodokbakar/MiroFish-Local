@@ -600,6 +600,8 @@ class TestStep5InteractionVueContract:
         repo_root = Path(__file__).resolve().parents[2]
         vue_file = repo_root / "frontend" / "src" / "components" / "Step5Interaction.vue"
         content = vue_file.read_text(encoding="utf-8")
+        markdown_file = repo_root / "frontend" / "src" / "utils" / "markdown.js"
+        markdown_content = markdown_file.read_text(encoding="utf-8")
 
         # Must check typeof res.data?.response === 'string'
         assert "typeof res.data?.response === 'string'" in content
@@ -607,8 +609,10 @@ class TestStep5InteractionVueContract:
         assert "res.data?.response?.response || res.data?.answer" in content
         # Must store stringified content
         assert "typeof respContent === 'string' ? respContent : JSON.stringify(respContent)" in content
-        # renderMarkdown must guard against non-string input
-        assert "typeof content === 'string' ? content : JSON.stringify(content)" in content
+        # Markdown rendering uses the shared helper and preserves non-string JSON input support.
+        assert "import { renderMarkdown } from '../utils/markdown.js'" in content
+        assert "const rawContent = typeof content === 'string' ? content : JSON.stringify(content)" in markdown_content
+        assert "escapeHtml(rawContent)" in markdown_content
 
     def test_vue_file_interaction_contracts(self):
         """Verify Step5Interaction.vue adheres to chat API parameters and error handling contracts."""

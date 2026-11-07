@@ -61,6 +61,7 @@ Only the orchestrator edits this file.
 | 042 | - | Issue #34: unhandled partial line reads in _read_action_log cause silent action and event drops | bugfix | direct | medium | ported | PR #51 (`7333b7a`) | Track last valid newline byte offset in _read_action_log to prevent partial line drops and JSONDecodeError data loss; 696 tests passed. |
 | 043 | - | Issue #35: nested dictionary in /api/report/chat response crashes Vue markdown rendering and breaks multi-turn chat | bugfix | direct | low | ported | PR #52 (`17fa753`) | Flatten response dict in /api/report/chat and ensure message content in Step5Interaction is string; 708 tests passed. |
 | 044 | - | Issue #39: validate chunk_size and chunk_overlap in build_graph to prevent infinite loop / DoS | bugfix | direct | medium | ported | PR #53 (`d82f521`) | Validate chunk parameters in /api/graph/build and guarantee strict forward progress in split_text_into_chunks; 720 tests passed. |
+| 045 | - | Issue #29: XSS through unescaped Markdown and interview answers | bugfix | direct | medium | in-progress | `fix/issue-29-markdown-xss` | Escape untrusted content before Markdown/answer HTML sinks; add DOM regressions and run frontend tests in CI. |
 
 ## Skipped (with reason)
 | Upstream commit | Reason |
