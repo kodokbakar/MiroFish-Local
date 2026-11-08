@@ -33,20 +33,39 @@ OASIS), and record modifications.
   "fix" it with a destructive command.
 - Never touch another worktree's directory or branch.
 
+## Agent roles
+| Role | Primary Responsibility | Permissions & Boundary |
+|---|---|---|
+| `planner` | Technical scoping and acceptance criteria formulation | Read-only across repository; never writes code |
+| `debugger` | Bug reproduction, root-cause isolation, and failing test authoring | Read-only on production code; writable only in `backend/tests/` or `frontend/tests/` |
+| `developer` | Implementation of feature or fix in assigned worktree | Writable in current worktree; minimal diff; no drive-by refactors |
+| `reviewer` | Evidence-based review against intent, AGENTS.md, and Neo4j rules | Read-only; bash only for diff/test inspection; verdict `APPROVE` or `CHANGES` |
+| `tester` | Independent test execution (`uv run pytest`, `ruff`, build checks) | Read-only on production code; writable only in test directories; verdict `PASS` or `FAIL` |
+| `integrator` | Merges approved item branch into main and cleans worktree | Acts strictly after owner approval |
+| `researcher` | On-demand technical question answering with citations and trade-offs | Read-only; no state changes |
+| `upstream-analyst` | Upstream commit classification and portability analysis | Read-only |
+| `graph-migration` | Neo4j schema, vector index, and embedding migrations | Specialized for Neo4j database migrations |
+| `docs-writer` | Documentation updates (README, LEDGER, guides) | Documentation files only, invoked after `APPROVE` |
+
 ## Orchestrator protocol (main omp session)
 1. Read `docs/porting/LEDGER.md`. Pick the next `pending` item.
 2. Work only inside this item's worktree (`git worktree add ../mp-<id> -b port/<id>`).
-3. Delegate strictly in order: `developer` -> `reviewer` -> `tester`. Stages run sequentially.
+3. Select execution flow:
+   - **Feature / Porting Flow:**
+     `planner` (optional/complex items) $\rightarrow$ `developer` $\rightarrow$ `reviewer` $\rightarrow$ `tester`
+   - **Bugfix / Regression Flow:**
+     `debugger` (reproduces, commits 1 failing test) $\rightarrow$ `developer` (fixes root cause) $\rightarrow$ `reviewer` $\rightarrow$ `tester`
+   - **On-Demand Technical Research:**
+     Call `researcher` whenever architectural questions, upstream API behaviors, or Neo4j trade-offs require investigation before implementation.
 4. Reviewer verdict is `APPROVE` or `CHANGES(list)`. Maximum 3 developer<->reviewer rounds,
    then stop and escalate to the owner with a short summary.
 5. After each stage, run `git status --short`, `git stash list`, and `git diff --stat`.
-   `git stash list` must be empty and only expected files may have changed (tester: test files only).
+   `git stash list` must be empty and only expected files may have changed (`tester` & `debugger`: test files only).
    If not, stop and escalate to the owner; do not repair it yourself.
 6. Never merge to main without explicit owner approval. After approval, use `integrator`.
 7. Before ending an item, update LEDGER (status + one-line note).
 8. Use `graph-migration` only for Neo4j schema, vector index, or embedding-model changes.
    Use `docs-writer` only after APPROVE, for documentation files.
-
 ## Handoff contract (every worker's final report, under 40 lines)
 - `ITEM:` id
 - `CHANGED:` files
