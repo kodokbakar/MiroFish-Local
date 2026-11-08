@@ -58,3 +58,50 @@ def test_node_search_returns_labels_and_standard_fields(path):
     assert result["graph_id"] == "g"
     assert not {"embedding", "name_lower", "attributes_json"} & result.keys()
     assert result["score"] == pytest.approx({"vector": 0.7, "keyword": 0.3, "both": 1.0}[path])
+
+
+def test_search_edges_empty_query_skips_vector_and_uses_match_fallback():
+    embedding = Mock()
+    session = Mock()
+    record = {
+        "uuid": "r1", "name": "KNOWS", "fact": "Alice knows Bob",
+        "src_uuid": "alice", "tgt_uuid": "bob", "score": 1.0,
+    }
+
+    def run(query, **kwargs):
+        assert "vector" not in query
+        assert "queryRelationships" not in query
+        assert "MATCH ()-[r:RELATION" in query
+        return [record]
+
+    session.run.side_effect = run
+    service = SearchService(embedding)
+    results = service.search_edges(session, "g", "")
+    assert len(results) == 1
+    embedding.embed.assert_not_called()
+    assert results[0]["uuid"] == "r1"
+    assert results[0]["score"] == pytest.approx(0.3)
+
+
+def test_search_nodes_empty_query_skips_vector_and_uses_match_fallback():
+    embedding = Mock()
+    session = Mock()
+    record = {
+        "uuid": "n1", "name": "Alice", "summary": "Person",
+        "labels": ["Entity", "Person"], "score": 1.0,
+    }
+
+    def run(query, **kwargs):
+        assert "vector" not in query
+        assert "queryNodes" not in query
+        assert "MATCH (n:Entity" in query
+        return [record]
+
+    session.run.side_effect = run
+    service = SearchService(embedding)
+    results = service.search_nodes(session, "g", "   ")
+    assert len(results) == 1
+    embedding.embed.assert_not_called()
+    assert results[0]["uuid"] == "n1"
+    assert results[0]["labels"] == ["Person"]
+    assert results[0]["score"] == pytest.approx(0.3)

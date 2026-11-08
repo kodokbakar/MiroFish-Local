@@ -241,6 +241,43 @@ class TestStorageBatchUnwindAndIndexing(unittest.TestCase):
         self.assertIn(rel_key, self.fake_driver.relations)
         self.assertEqual(self.fake_driver.relations[rel_key]["fact"], "Alice hires Bob")
 
+    def test_add_text_empty_and_zero_embedding_fallback_to_none(self):
+        """Verify missing, empty, or zero-vector embeddings fall back to None in UNWIND parameters."""
+        self.mock_ner.extract.return_value = {
+            "entities": [
+                {"name": "Alice", "type": "Person", "attributes": {}},
+                {"name": "Bob", "type": "Person", "attributes": {}},
+            ],
+            "relations": [
+                {"source": "Alice", "target": "Bob", "type": "KNOWS", "fact": ""},
+            ],
+        }
+        # embed_batch returns None for empty text, [0.0]*dimensions for zero-vector
+        self.mock_embedding.embed_batch.side_effect = None
+        self.mock_embedding.embed_batch.return_value = [None, [0.0, 0.0, 0.0], []]
+
+        self.storage.add_text("test-graph", "Alice and Bob.")
+
+        entity_unwind_queries = [
+            (q, params) for q, params in self.fake_driver.queries
+            if "UNWIND $entities AS e" in q
+        ]
+        self.assertEqual(len(entity_unwind_queries), 1)
+        _, params = entity_unwind_queries[0]
+        # Both Alice (None) and Bob ([0.0, 0.0, 0.0]) must have None as embedding
+        for e in params["entities"]:
+            self.assertIsNone(e["embedding"])
+
+        relation_unwind_queries = [
+            (q, params) for q, params in self.fake_driver.queries
+            if "UNWIND $relations AS rel_data" in q
+        ]
+        self.assertEqual(len(relation_unwind_queries), 1)
+        _, params = relation_unwind_queries[0]
+        # Relation with empty embedding [] must have None as fact_embedding
+        for r in params["relations"]:
+            self.assertIsNone(r["fact_embedding"])
+
     # ----------------------------------------------------------------
     # 3. Batch Node Retrieval API (get_nodes_by_uuids)
     # ----------------------------------------------------------------

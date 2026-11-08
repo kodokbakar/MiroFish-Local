@@ -102,7 +102,7 @@ class TestEmbeddingService(unittest.TestCase):
             service.embed("")
 
         results = service.embed_batch(["", "   "])
-        self.assertEqual(results, [[0.0] * 768, [0.0] * 768])
+        self.assertEqual(results, [None, None])
         mock_post.assert_not_called()
 
     @patch("app.storage.embedding_service.requests.post")
