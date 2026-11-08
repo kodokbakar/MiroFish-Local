@@ -43,9 +43,13 @@ yarn-error.log*
 htmlcov/
 
 # Cursor
+# Agent profiles & configs (shared configs tracked, caches ignored)
 .cursor/
-.claude/
-.omp/
+.claude/*
+!.claude/agents/
+.omp/*
+!.omp/agents/
+!.omp/config.yml
 
 # 文档与测试程序
 mydoc/
