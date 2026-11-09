@@ -101,7 +101,9 @@ class InMemoryNeo4jDriver:
                         if not ent.get("summary"):
                             ent["summary"] = e.get("summary", "")
                         ent["attributes_json"] = e.get("attrs_json", "{}")
-                        ent["embedding"] = e.get("embedding", [])
+                        incoming_emb = e.get("embedding")
+                        if incoming_emb is not None and len(incoming_emb) > 0:
+                            ent["embedding"] = incoming_emb
                     else:
                         ent = {
                             "uuid": e["uuid"],
@@ -124,7 +126,9 @@ class InMemoryNeo4jDriver:
                     if not ent.get("summary"):
                         ent["summary"] = kwargs.get("summary", "")
                     ent["attributes_json"] = kwargs.get("attrs_json", "{}")
-                    ent["embedding"] = kwargs.get("embedding", [])
+                    incoming_emb = kwargs.get("embedding")
+                    if incoming_emb is not None and len(incoming_emb) > 0:
+                        ent["embedding"] = incoming_emb
                 else:
                     ent = {
                         "uuid": kwargs["uuid"],
@@ -381,6 +385,32 @@ class TestNeo4jStorageIngestion(unittest.TestCase):
 
         attrs = json.loads(self.fake_driver.entities[key]["attributes_json"])
         self.assertEqual(attrs, {"status": "repaired"})
+
+    def test_entity_unwind_merge_preserves_embedding_across_chunks_stateful(self):
+        """Verify UNWIND MERGE preserves existing entity embedding when subsequent chunk fails embedding."""
+        # Chunk 1: Alice extracted and successfully embedded
+        self.mock_ner.extract.return_value = {
+            "entities": [{"name": "Alice", "type": "Person", "attributes": {"role": "Engineer"}}],
+            "relations": [],
+        }
+        self.storage.add_text("test-graph", "Alice is an AI Engineer.")
+
+        key = ("test-graph", "alice")
+        self.assertIn(key, self.fake_driver.entities)
+        self.assertEqual(self.fake_driver.entities[key]["embedding"], [0.1, 0.2])
+
+        # Chunk 2: Alice mentioned again, but embedding service fails (falls back to empty list)
+        self.mock_embedding.embed_batch.side_effect = RuntimeError("Embedding service unavailable")
+        self.mock_ner.extract.return_value = {
+            "entities": [{"name": "Alice", "type": "Person", "attributes": {"role": "Tech Lead"}}],
+            "relations": [],
+        }
+        self.storage.add_text("test-graph", "Alice became Tech Lead.")
+
+        # Original embedding from chunk 1 must be preserved in self.fake_driver.entities
+        self.assertEqual(self.fake_driver.entities[key]["embedding"], [0.1, 0.2])
+        attrs = json.loads(self.fake_driver.entities[key]["attributes_json"])
+        self.assertEqual(attrs, {"role": "Tech Lead"})
 
     def test_create_relation_cypher_structure_and_clauses(self):
         """Verify _create_relation uses MERGE with ON CREATE and ON MATCH clauses per Issue #1 spec."""
