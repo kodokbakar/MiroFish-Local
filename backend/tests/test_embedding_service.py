@@ -102,8 +102,28 @@ class TestEmbeddingService(unittest.TestCase):
             service.embed("")
 
         results = service.embed_batch(["", "   "])
-        self.assertEqual(results, [[0.0] * 768, [0.0] * 768])
+        self.assertEqual(results, [None, None])
         mock_post.assert_not_called()
+
+    @patch("app.storage.embedding_service.requests.post")
+    def test_gemini_embed_batch_mixed_empty_and_valid(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        fake_vector = [0.2] * 768
+        mock_resp.json.return_value = {
+            "embeddings": [{"values": fake_vector}]
+        }
+        mock_post.return_value = mock_resp
+
+        service = EmbeddingService(provider="gemini", api_key="test-key", dimensions=768)
+        results = service.embed_batch(["", "\t\n ", "valid query", "   "])
+
+        self.assertEqual(len(results), 4)
+        self.assertIsNone(results[0])
+        self.assertIsNone(results[1])
+        self.assertEqual(results[2], fake_vector)
+        self.assertIsNone(results[3])
+        mock_post.assert_called_once()
 
     @patch("app.storage.embedding_service.requests.post")
     def test_gemini_caching(self, mock_post):

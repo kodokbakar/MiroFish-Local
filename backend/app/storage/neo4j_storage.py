@@ -39,6 +39,13 @@ __all__ = [
 logger = logging.getLogger('mirofish.neo4j_storage')
 
 
+def _normalize_embedding(emb: Optional[List[float]]) -> Optional[List[float]]:
+    """Normalize embedding: return None if missing, empty, or all zeros (prevents Neo4j cosine index division by zero)."""
+    if not emb or not any(v != 0.0 for v in emb):
+        return None
+    return emb
+
+
 class Neo4jStorage(GraphStorage):
     """Neo4j CE implementation of the GraphStorage interface."""
 
@@ -263,7 +270,7 @@ class Neo4jStorage(GraphStorage):
                 all_embeddings = self._embedding.embed_batch(all_texts_to_embed)
             except Exception as e:
                 logger.warning(f"[add_text] Batch embedding failed, falling back to empty: {e}")
-                all_embeddings = [[] for _ in all_texts_to_embed]
+                all_embeddings = [None for _ in all_texts_to_embed]
 
         entity_embeddings = all_embeddings[:len(entities)]
         relation_embeddings = all_embeddings[len(entities):]
@@ -279,7 +286,8 @@ class Neo4jStorage(GraphStorage):
             etype = entity.get("type", "Entity")
             attrs = entity.get("attributes", {})
             summary_text = entity_summaries[idx]
-            embedding = entity_embeddings[idx] if idx < len(entity_embeddings) else []
+            raw_emb = entity_embeddings[idx] if idx < len(entity_embeddings) else None
+            embedding = _normalize_embedding(raw_emb)
 
             if name_lower not in merged_entities_by_name:
                 merged_entities_by_name[name_lower] = {
@@ -463,7 +471,8 @@ class Neo4jStorage(GraphStorage):
                             )
                             continue
 
-                        fact_emb = relation_embeddings[idx] if idx < len(relation_embeddings) else []
+                        raw_fact_emb = relation_embeddings[idx] if idx < len(relation_embeddings) else None
+                        fact_emb = _normalize_embedding(raw_fact_emb)
                         key = (source_uuid, target_uuid, rtype)
                         if key not in deduped_relations:
                             deduped_relations[key] = {
@@ -478,6 +487,7 @@ class Neo4jStorage(GraphStorage):
                             prev = deduped_relations[key]
                             if not prev.get("fact") and fact:
                                 prev["fact"] = fact
+                            if not prev.get("fact_embedding") and fact_emb:
                                 prev["fact_embedding"] = fact_emb
 
                     prepared_relations = list(deduped_relations.values())

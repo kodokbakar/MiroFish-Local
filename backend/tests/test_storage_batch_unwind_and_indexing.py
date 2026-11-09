@@ -241,6 +241,88 @@ class TestStorageBatchUnwindAndIndexing(unittest.TestCase):
         self.assertIn(rel_key, self.fake_driver.relations)
         self.assertEqual(self.fake_driver.relations[rel_key]["fact"], "Alice hires Bob")
 
+    def test_add_text_empty_and_zero_embedding_fallback_to_none(self):
+        """Verify missing, empty, or zero-vector embeddings fall back to None in UNWIND parameters."""
+        self.mock_ner.extract.return_value = {
+            "entities": [
+                {"name": "Alice", "type": "Person", "attributes": {}},
+                {"name": "Bob", "type": "Person", "attributes": {}},
+            ],
+            "relations": [
+                {"source": "Alice", "target": "Bob", "type": "KNOWS", "fact": ""},
+            ],
+        }
+        # embed_batch returns None for empty text, [0.0]*dimensions for zero-vector
+        self.mock_embedding.embed_batch.side_effect = None
+        self.mock_embedding.embed_batch.return_value = [None, [0.0, 0.0, 0.0], []]
+
+        self.storage.add_text("test-graph", "Alice and Bob.")
+
+        entity_unwind_queries = [
+            (q, params) for q, params in self.fake_driver.queries
+            if "UNWIND $entities AS e" in q
+        ]
+        self.assertEqual(len(entity_unwind_queries), 1)
+        _, params = entity_unwind_queries[0]
+        # Both Alice (None) and Bob ([0.0, 0.0, 0.0]) must have None as embedding
+        for e in params["entities"]:
+            self.assertIsNone(e["embedding"])
+
+        relation_unwind_queries = [
+            (q, params) for q, params in self.fake_driver.queries
+            if "UNWIND $relations AS rel_data" in q
+        ]
+        self.assertEqual(len(relation_unwind_queries), 1)
+        _, params = relation_unwind_queries[0]
+        # Relation with empty embedding [] must have None as fact_embedding
+        for r in params["relations"]:
+            self.assertIsNone(r["fact_embedding"])
+
+    def test_normalize_embedding_edge_cases(self):
+        """Verify _normalize_embedding handles None, empty, all zeros, and valid vectors."""
+        from app.storage.neo4j_storage import _normalize_embedding
+
+        self.assertIsNone(_normalize_embedding(None))
+        self.assertIsNone(_normalize_embedding([]))
+        self.assertIsNone(_normalize_embedding([0.0, 0.0, 0.0]))
+        self.assertIsNone(_normalize_embedding([-0.0, 0.0]))
+        self.assertEqual(_normalize_embedding([0.0, 0.5, -0.2]), [0.0, 0.5, -0.2])
+        self.assertEqual(_normalize_embedding([1e-10]), [1e-10])
+
+    def test_relation_dedup_backfills_fact_embedding_when_initially_none(self):
+        """Verify relation deduplication preserves or backfills fact_embedding if initial was None."""
+        self.mock_ner.extract.return_value = {
+            "entities": [
+                {"name": "Alice", "type": "Person", "attributes": {}},
+                {"name": "Bob", "type": "Person", "attributes": {}},
+            ],
+            "relations": [
+                {"source": "Alice", "target": "Bob", "type": "KNOWS", "fact": ""},
+                {"source": "Alice", "target": "Bob", "type": "KNOWS", "fact": "Alice knows Bob well"},
+            ],
+        }
+        valid_vec = [0.1, 0.2, 0.3]
+        self.mock_embedding.embed_batch.side_effect = None
+        self.mock_embedding.embed_batch.return_value = [
+            [0.1, 0.1, 0.1],
+            [0.2, 0.2, 0.2],
+            None,
+            valid_vec,
+        ]
+
+        self.storage.add_text("test-graph", "Alice and Bob know each other.")
+
+        relation_unwind_queries = [
+            (q, params) for q, params in self.fake_driver.queries
+            if "UNWIND $relations AS rel_data" in q
+        ]
+        self.assertEqual(len(relation_unwind_queries), 1)
+        _, params = relation_unwind_queries[0]
+        self.assertEqual(len(params["relations"]), 1)
+        rel = params["relations"][0]
+        self.assertEqual(rel["fact"], "Alice knows Bob well")
+        self.assertEqual(rel["fact_embedding"], valid_vec)
+
     # ----------------------------------------------------------------
     # 3. Batch Node Retrieval API (get_nodes_by_uuids)
     # ----------------------------------------------------------------
