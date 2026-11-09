@@ -255,11 +255,12 @@ class TestStorageBatchUnwindAndIndexing(unittest.TestCase):
         ]
         self.assertTrue(len(entity_unwind_queries) > 0)
         cypher = entity_unwind_queries[0]
+        match_clause = cypher.split("ON MATCH SET")[1]
 
-        self.assertNotIn("n.embedding = e.embedding", cypher)
+        self.assertNotIn("n.embedding = e.embedding", match_clause)
         self.assertIn(
             "n.embedding = CASE WHEN e.embedding IS NOT NULL AND size(e.embedding) > 0 THEN e.embedding ELSE n.embedding END",
-            cypher,
+            match_clause,
         )
 
     # ----------------------------------------------------------------
