@@ -100,7 +100,7 @@ class EmbeddingService:
 
         return vector
 
-    def embed_batch(self, texts: List[str], batch_size: int = 32) -> List[List[float]]:
+    def embed_batch(self, texts: List[str], batch_size: int = 32) -> List[Optional[List[float]]]:
         """
         Generate embeddings for multiple texts.
 
@@ -111,7 +111,7 @@ class EmbeddingService:
             batch_size: Number of texts per request
 
         Returns:
-            List of embedding vectors (same order as input)
+            List of embedding vectors (same order as input). Empty/whitespace inputs return None.
         """
         if not texts:
             return []
@@ -122,16 +122,15 @@ class EmbeddingService:
 
         # Check cache first
         for i, text in enumerate(texts):
-            text = text.strip() if text else ""
-            if text in self._cache:
-                results[i] = self._cache[text]
-            elif text:
-                uncached_indices.append(i)
-                uncached_texts.append(text)
+            cleaned = text.strip() if text else ""
+            if not cleaned:
+                # Empty text — None (avoid zero vectors causing division by zero in Neo4j cosine index)
+                results[i] = None
+            elif cleaned in self._cache:
+                results[i] = self._cache[cleaned]
             else:
-                # Empty text — zero vector
-                results[i] = [0.0] * self.dimensions
-
+                uncached_indices.append(i)
+                uncached_texts.append(cleaned)
         # Batch-embed uncached texts
         if uncached_texts:
             all_vectors: List[List[float]] = []

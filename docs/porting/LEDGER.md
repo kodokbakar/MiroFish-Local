@@ -62,7 +62,8 @@ Only the orchestrator edits this file.
 | 043 | - | Issue #35: nested dictionary in /api/report/chat response crashes Vue markdown rendering and breaks multi-turn chat | bugfix | direct | low | ported | PR #52 (`17fa753`) | Flatten response dict in /api/report/chat and ensure message content in Step5Interaction is string; 708 tests passed. |
 | 044 | - | Issue #39: validate chunk_size and chunk_overlap in build_graph to prevent infinite loop / DoS | bugfix | direct | medium | ported | PR #53 (`d82f521`) | Validate chunk parameters in /api/graph/build and guarantee strict forward progress in split_text_into_chunks; 720 tests passed. |
 | 045 | - | Issue #29: XSS through unescaped Markdown and interview answers | bugfix | direct | medium | ported | PR #54 (`e9cda37`) | Escape untrusted content before Markdown/answer HTML sinks; add DOM regressions and run frontend tests in CI; 7 frontend + 20 backend contract tests passed. |
-| 047 | - | Issue #37: prevent entity vector embedding erasure during Cypher UNWIND MERGE | bugfix | direct | low | in-progress | port/047 | In progress |
+| 046 | - | Issue #40: prevent zero-vector division by zero in Neo4j cosine index | bugfix | direct | low | ported | PR #55 (`f58d84b`) | Avoid all-zero vectors in embed_batch and fallback to Cypher MATCH on empty query; 787 tests passed. |
+| 047 | - | Issue #37: prevent entity vector embedding erasure during Cypher UNWIND MERGE | bugfix | direct | low | ported | PR #56 (`5334f9f`) | Conditionally preserve n.embedding on MATCH in add_text UNWIND MERGE; 781 tests passed. |
 
 ## Skipped (with reason)
 | Upstream commit | Reason |

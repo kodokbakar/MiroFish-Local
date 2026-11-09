@@ -120,6 +120,26 @@ ORDER BY score DESC
 LIMIT $limit
 """
 
+# Cypher for fallback edge listing when query is empty
+_MATCH_FALLBACK_EDGES = """
+MATCH ()-[r:RELATION {graph_id: $graph_id}]->()
+WITH r, 1.0 AS score
+// startNode(relationship).uuid AS src_uuid, endNode(relationship).uuid AS tgt_uuid
+RETURN r.uuid AS uuid, r.name AS name, r.fact AS fact,
+       startNode(r).uuid AS src_uuid,
+       endNode(r).uuid AS tgt_uuid, score
+LIMIT $limit
+"""
+
+# Cypher for fallback node listing when query is empty
+_MATCH_FALLBACK_NODES = """
+MATCH (n:Entity {graph_id: $graph_id})
+WITH n, 1.0 AS score
+// labels(node) AS labels
+RETURN n.uuid AS uuid, n.name AS name, n.summary AS summary, labels(n) AS labels, score
+LIMIT $limit
+"""
+
 
 class SearchService:
     """Hybrid search combining vector similarity and keyword matching."""
@@ -142,16 +162,19 @@ class SearchService:
 
         Returns list of dicts with edge properties + 'score'.
         """
-        query_vector = self.embedding.embed(query)
-
-        # Vector search
-        vector_results = self._run_edge_vector_search(
-            session, graph_id, query_vector, limit * 2
-        )
+        query_text = (query or "").strip()
+        if not query_text:
+            vector_results = []
+        else:
+            query_vector = self.embedding.embed(query)
+            # Vector search
+            vector_results = self._run_edge_vector_search(
+                session, graph_id, query_vector, limit * 2
+            )
 
         # Keyword search
         keyword_results = self._run_edge_keyword_search(
-            session, graph_id, query, limit * 2
+            session, graph_id, query_text, limit * 2
         )
 
         # Merge and rank
@@ -172,14 +195,17 @@ class SearchService:
 
         Returns list of dicts with node properties + 'score'.
         """
-        query_vector = self.embedding.embed(query)
-
-        vector_results = self._run_node_vector_search(
-            session, graph_id, query_vector, limit * 2
-        )
+        query_text = (query or "").strip()
+        if not query_text:
+            vector_results = []
+        else:
+            query_vector = self.embedding.embed(query)
+            vector_results = self._run_node_vector_search(
+                session, graph_id, query_vector, limit * 2
+            )
 
         keyword_results = self._run_node_keyword_search(
-            session, graph_id, query, limit * 2
+            session, graph_id, query_text, limit * 2
         )
 
         merged = self._merge_results(
@@ -211,14 +237,21 @@ class SearchService:
     ) -> List[Dict[str, Any]]:
         """Run fulltext (BM25) search on edge fact + name."""
         try:
-            # Escape special Lucene characters in query
-            safe_query = self._escape_lucene(query)
-            result = session.run(
-                _FULLTEXT_SEARCH_EDGES,
-                graph_id=graph_id,
-                query_text=safe_query,
-                limit=limit,
-            )
+            if not query or not query.strip():
+                result = session.run(
+                    _MATCH_FALLBACK_EDGES,
+                    graph_id=graph_id,
+                    limit=limit,
+                )
+            else:
+                # Escape special Lucene characters in query
+                safe_query = self._escape_lucene(query)
+                result = session.run(
+                    _FULLTEXT_SEARCH_EDGES,
+                    graph_id=graph_id,
+                    query_text=safe_query,
+                    limit=limit,
+                )
             return [
                 _unpack_relationship(record)
                 for record in result
@@ -251,13 +284,20 @@ class SearchService:
     ) -> List[Dict[str, Any]]:
         """Run fulltext search on entity name + summary."""
         try:
-            safe_query = self._escape_lucene(query)
-            result = session.run(
-                _FULLTEXT_SEARCH_NODES,
-                graph_id=graph_id,
-                query_text=safe_query,
-                limit=limit,
-            )
+            if not query or not query.strip():
+                result = session.run(
+                    _MATCH_FALLBACK_NODES,
+                    graph_id=graph_id,
+                    limit=limit,
+                )
+            else:
+                safe_query = self._escape_lucene(query)
+                result = session.run(
+                    _FULLTEXT_SEARCH_NODES,
+                    graph_id=graph_id,
+                    query_text=safe_query,
+                    limit=limit,
+                )
             return [
                 _unpack_node(record)
                 for record in result
