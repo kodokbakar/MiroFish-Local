@@ -400,7 +400,7 @@ class Neo4jStorage(GraphStorage):
                             n.summary = CASE WHEN n.summary = '' OR n.summary IS NULL
                                 THEN e.summary ELSE n.summary END,
                             n.attributes_json = e.attrs_json,
-                            n.embedding = e.embedding
+                            n.embedding = CASE WHEN e.embedding IS NOT NULL AND size(e.embedding) > 0 THEN e.embedding ELSE n.embedding END
                         RETURN e.name_lower AS name_lower, n.uuid AS uuid
                         """,
                         gid=graph_id,
