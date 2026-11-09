@@ -241,6 +241,27 @@ class TestStorageBatchUnwindAndIndexing(unittest.TestCase):
         self.assertIn(rel_key, self.fake_driver.relations)
         self.assertEqual(self.fake_driver.relations[rel_key]["fact"], "Alice hires Bob")
 
+    def test_entity_unwind_merge_preserves_embedding_on_match(self):
+        """Verify entity UNWIND MERGE conditionally preserves existing embedding on match."""
+        self.mock_ner.extract.return_value = {
+            "entities": [{"name": "Alice", "type": "Person", "attributes": {}}],
+            "relations": [],
+        }
+        self.storage.add_text("test-graph", "Alice arrives.")
+
+        entity_unwind_queries = [
+            q for q, _ in self.fake_driver.queries
+            if "UNWIND $entities AS e" in q
+        ]
+        self.assertTrue(len(entity_unwind_queries) > 0)
+        cypher = entity_unwind_queries[0]
+
+        self.assertNotIn("n.embedding = e.embedding", cypher)
+        self.assertIn(
+            "n.embedding = CASE WHEN e.embedding IS NOT NULL AND size(e.embedding) > 0 THEN e.embedding ELSE n.embedding END",
+            cypher,
+        )
+
     # ----------------------------------------------------------------
     # 3. Batch Node Retrieval API (get_nodes_by_uuids)
     # ----------------------------------------------------------------
