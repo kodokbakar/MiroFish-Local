@@ -38,8 +38,7 @@ class TextProcessor:
     @staticmethod
     def split_table(source: str, headers: List[str], records: List[dict], chunk_size: int) -> List[str]:
         """Pack complete records while repeating their source and column context."""
-        display_source = source if len(source) <= 32 else source[:29] + '...'
-        source_line = f"Source: {display_source}\n"
+        source_line = f"Source: {source}\n"
         prefix = f"{source_line}Columns: {', '.join(headers)}\n"
         chunks = []
         current = prefix
@@ -73,9 +72,9 @@ class TextProcessor:
                         label = f"Record {number} (part {part}): "
                         capacity = chunk_size - len(field_prefix) - len(label)
                     if capacity <= 0:
-                        # Wide field names need compact labels, but keep source and the full name.
-                        field_prefix = f"S:{display_source[:8]}\nColumns:{key}\n"
-                        label = f"R{number}.{part}: "
+                        # Keep the complete filename and column even with compact labels.
+                        field_prefix = f"{source_line}{number}|{key}|"
+                        label = ""
                         capacity = chunk_size - len(field_prefix) - len(label)
                     if capacity <= 0:
                         raise ValueError(f"Table field name in {source} exceeds chunk size")

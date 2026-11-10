@@ -79,8 +79,45 @@ def test_long_column_name_uses_compact_source_and_keeps_full_name():
     chunks = TextProcessor.split_table("dataset.csv", [key], [{key: "value"}], 100)
     assert chunks
     assert all(len(chunk) <= 100 for chunk in chunks)
-    assert all(key in chunk and "S:dataset." in chunk for chunk in chunks)
-    assert "".join(chunk.rsplit(": ", 1)[1] for chunk in chunks) == '"value"'
+    assert all(key in chunk and "Source: dataset.csv" in chunk for chunk in chunks)
+    assert '"value"' in "".join(chunk.split('|')[-1] for chunk in chunks)
+
+
+def test_compact_chunks_keep_distinct_complete_source_names():
+    key = "x" * 35
+    first_name = "same-prefix-longer-than-thirty-two-one.csv"
+    second_name = "same-prefix-longer-than-thirty-two-two.csv"
+    first = TextProcessor.split_table(first_name, [key], [{key: "first" * 20}], 100)
+    second = TextProcessor.split_table(second_name, [key], [{key: "second" * 20}], 100)
+    assert all(len(chunk) <= 100 for chunk in first + second)
+    assert all(chunk.startswith(f"Source: {first_name}\n") for chunk in first)
+    assert all(chunk.startswith(f"Source: {second_name}\n") for chunk in second)
+    assert all(key in chunk for chunk in first + second)
+
+
+def test_impossible_header_returns_400_before_graph_task(tmp_path, monkeypatch):
+    class Generator:
+        def generate(self, **kwargs):
+            return {"entity_types": [], "edge_types": [], "analysis_summary": "ok"}
+
+    monkeypatch.setattr(ProjectManager, "PROJECTS_DIR", str(tmp_path))
+    monkeypatch.setattr(graph_api, "OntologyGenerator", Generator)
+    app = create_app()
+    app.config.update(TESTING=True)
+    key = "x" * 100
+    upload = app.test_client().post(
+        "/api/graph/ontology/generate",
+        data={"simulation_requirement": "Discuss data", "files": (io.BytesIO(f"{key}\nvalue\n".encode()), "wide.csv")},
+        content_type="multipart/form-data",
+    )
+    assert upload.status_code == 200
+    monkeypatch.setattr(graph_api, "_get_storage", lambda: pytest.fail("graph task was started"))
+    build = app.test_client().post(
+        "/api/graph/build",
+        json={"project_id": upload.json["data"]["project_id"], "chunk_size": 100, "chunk_overlap": 10},
+    )
+    assert build.status_code == 400
+    assert "field name" in build.json["error"]
 
 
 @pytest.mark.parametrize("filename,content", [
