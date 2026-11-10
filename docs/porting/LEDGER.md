@@ -64,6 +64,7 @@ Only the orchestrator edits this file.
 | 045 | - | Issue #29: XSS through unescaped Markdown and interview answers | bugfix | direct | medium | ported | PR #54 (`e9cda37`) | Escape untrusted content before Markdown/answer HTML sinks; add DOM regressions and run frontend tests in CI; 7 frontend + 20 backend contract tests passed. |
 | 046 | - | Issue #40: prevent zero-vector division by zero in Neo4j cosine index | bugfix | direct | low | ported | PR #55 (`f58d84b`) | Avoid all-zero vectors in embed_batch and fallback to Cypher MATCH on empty query; 787 tests passed. |
 | 047 | - | Issue #37: prevent entity vector embedding erasure during Cypher UNWIND MERGE | bugfix | direct | low | ported | PR #56 (`5334f9f`) | Conditionally preserve n.embedding on MATCH in add_text UNWIND MERGE; 781 tests passed. |
+| 050 | - | Issue #59: parallelize NER extraction with bounded concurrency | perf | adapt | high | in-progress | `port/050` | Separate extraction from ordered graph persistence with bounded workers; benchmark, reviewer, and tester pending. |
 
 ## Skipped (with reason)
 | Upstream commit | Reason |
