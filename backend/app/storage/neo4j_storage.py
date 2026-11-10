@@ -13,7 +13,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, Callable
 
-from neo4j import GraphDatabase, Session as Neo4jSession
+from neo4j import GraphDatabase
 from neo4j.exceptions import (
     TransientError,
     ServiceUnavailable,
@@ -241,22 +241,36 @@ class Neo4jStorage(GraphStorage):
         ontology: Optional[Dict[str, Any]] = None,
     ) -> str:
         """Process text: NER/RE → batch embed → create nodes/edges → return episode_id."""
-        episode_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
-
-        # Get ontology for NER guidance if not provided
         if ontology is None:
             ontology = self.get_ontology(graph_id)
+        extraction = self.extract_text(text, ontology)
+        return self.persist_extraction(graph_id, text, extraction)
 
-        # Extract entities and relations
-        logger.info(f"[add_text] Starting NER extraction for chunk ({len(text)} chars)...")
+    def extract_text(self, text: str, ontology: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract without touching Neo4j, so calls can overlap safely."""
+        started = time.perf_counter()
         extraction = self._ner.extract(text, ontology)
+        logger.info(
+            "[add_text] NER done: %d entities, %d relations, %.3fs",
+            len(extraction["entities"]), len(extraction["relations"]),
+            time.perf_counter() - started,
+        )
+        return extraction
+
+    def persist_extraction(
+        self, graph_id: str, text: str, extraction: Dict[str, Any]
+    ) -> str:
+        """Embed and write one successful extraction in a single graph transaction."""
+        if (
+            not isinstance(extraction, dict)
+            or not isinstance(extraction.get("entities"), list)
+            or not isinstance(extraction.get("relations"), list)
+        ):
+            raise ValueError("Invalid NER extraction result")
+        episode_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
         entities = extraction.get("entities", [])
         relations = extraction.get("relations", [])
-
-        logger.info(
-            f"[add_text] NER done: {len(entities)} entities, {len(relations)} relations"
-        )
 
         # --- Batch embed all texts at once ---
         entity_summaries = [f"{e['name']} ({e['type']})" for e in entities]
@@ -264,6 +278,7 @@ class Neo4jStorage(GraphStorage):
         all_texts_to_embed = entity_summaries + fact_texts
 
         all_embeddings: list = []
+        embed_started = time.perf_counter()
         if all_texts_to_embed:
             logger.info(f"[add_text] Batch-embedding {len(all_texts_to_embed)} texts...")
             try:
@@ -274,7 +289,8 @@ class Neo4jStorage(GraphStorage):
 
         entity_embeddings = all_embeddings[:len(entities)]
         relation_embeddings = all_embeddings[len(entities):]
-        logger.info(f"[add_text] Embedding done, writing to Neo4j...")
+        embed_seconds = time.perf_counter() - embed_started
+        write_started = time.perf_counter()
 
         # Pre-process entities: deduplicate and merge within chunk
         merged_entities_by_name: Dict[str, Dict[str, Any]] = {}
@@ -533,7 +549,10 @@ class Neo4jStorage(GraphStorage):
 
             self._call_with_retry(session.execute_write, _persist_chunk)
 
-        logger.info(f"[add_text] Chunk done: episode={episode_id}")
+        logger.info(
+            "[add_text] Chunk done: episode=%s embed=%.3fs write=%.3fs",
+            episode_id, embed_seconds, time.perf_counter() - write_started,
+        )
         return episode_id
 
     def add_text_batch(

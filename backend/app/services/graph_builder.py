@@ -6,6 +6,8 @@ Uses GraphStorage (Neo4j) to replace Zep Cloud API.
 import time
 import logging
 import threading
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Any, List, Optional, Callable
 from dataclasses import dataclass
 
@@ -206,51 +208,97 @@ class GraphBuilderService:
         batch_size: int = 3,
         progress_callback: Optional[Callable] = None,
         ontology: Optional[Dict[str, Any]] = None,
+        max_workers: Optional[int] = None,
     ) -> List[str]:
-        """Add text in batches to graph, return uuid list of all episodes"""
+        """Extract with bounded concurrency, then persist episodes in source order."""
         episode_uuids = []
         total_chunks = len(chunks)
+        if not total_chunks:
+            return episode_uuids
+        batch_size = max(1, batch_size)
+        workers = Config.NER_EXTRACTION_WORKERS if max_workers is None else max_workers
+        if isinstance(workers, bool) or not isinstance(workers, int) or not 1 <= workers <= 4:
+            raise ValueError("NER_EXTRACTION_WORKERS must be between 1 and 4")
         total_batches = (total_chunks + batch_size - 1) // batch_size
 
-        logger.info(f"[graph_build] Starting: {total_chunks} chunks, {total_batches} batches (batch_size={batch_size})")
+        logger.info(
+            "[graph_build] Starting: %d chunks, %d batches, workers=%d, max_inflight=%d",
+            total_chunks, total_batches, workers, workers * 2,
+        )
 
-        for i in range(0, total_chunks, batch_size):
-            batch_chunks = chunks[i:i + batch_size]
-            batch_num = i // batch_size + 1
-
+        def record_persisted(index: int, episode_id: str, elapsed: float) -> None:
+            episode_uuids.append(episode_id)
+            logger.info(
+                "[graph_build] Chunk %d/%d persisted in %.3fs",
+                index + 1, total_chunks, elapsed,
+            )
             if progress_callback:
-                progress = (i + len(batch_chunks)) / total_chunks
                 progress_callback(
-                    f"Processing batch {batch_num}/{total_batches} ({len(batch_chunks)} chunks)...",
-                    progress
+                    f"Processed chunk {index + 1}/{total_chunks}",
+                    (index + 1) / total_chunks,
                 )
 
-            for j, chunk in enumerate(batch_chunks):
-                chunk_idx = i + j + 1
-                chunk_preview = chunk[:80].replace('\n', ' ')
-                logger.info(
-                    f"[graph_build] Chunk {chunk_idx}/{total_chunks} "
-                    f"({len(chunk)} chars): \"{chunk_preview}...\""
-                )
-                t0 = time.time()
+        if workers == 1:
+            for index, chunk in enumerate(chunks):
+                started = time.perf_counter()
                 try:
                     episode_id = self.storage.add_text(graph_id, chunk, ontology=ontology)
-                    episode_uuids.append(episode_id)
-                    elapsed = time.time() - t0
-                    logger.info(
-                        f"[graph_build] Chunk {chunk_idx}/{total_chunks} done in {elapsed:.1f}s"
-                    )
-                except Exception as e:
-                    elapsed = time.time() - t0
+                except Exception as error:
                     logger.error(
-                        f"[graph_build] Chunk {chunk_idx}/{total_chunks} FAILED "
-                        f"after {elapsed:.1f}s: {e}"
+                        "[graph_build] Chunk %d/%d failed: %s",
+                        index + 1, total_chunks, type(error).__name__,
                     )
                     if progress_callback:
-                        progress_callback(f"Batch {batch_num} processing failed: {str(e)}", 0)
+                        progress_callback(f"Chunk {index + 1} processing failed", 0)
                     raise
+                record_persisted(index, episode_id, time.perf_counter() - started)
+        else:
+            if ontology is None:
+                ontology = self.storage.get_ontology(graph_id)
 
-        logger.info(f"[graph_build] All {total_chunks} chunks processed successfully")
+            def extract_one(chunk: str):
+                started = time.perf_counter()
+                result = self.storage.extract_text(chunk, ontology)
+                return result, time.perf_counter() - started
+
+            pending = deque()
+            next_index = 0
+            extraction_seconds = 0.0
+            persistence_seconds = 0.0
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                while next_index < min(total_chunks, workers * 2):
+                    pending.append((next_index, pool.submit(extract_one, chunks[next_index])))
+                    next_index += 1
+
+                while pending:
+                    index, future = pending.popleft()
+                    try:
+                        extraction, elapsed = future.result()
+                        extraction_seconds += elapsed
+                        started = time.perf_counter()
+                        episode_id = self.storage.persist_extraction(graph_id, chunks[index], extraction)
+                        persisted_in = time.perf_counter() - started
+                        persistence_seconds += persisted_in
+                    except Exception as error:
+                        for _, remaining in pending:
+                            remaining.cancel()
+                        logger.error(
+                            "[graph_build] Chunk %d/%d failed: %s",
+                            index + 1, total_chunks, type(error).__name__,
+                        )
+                        if progress_callback:
+                            progress_callback(f"Chunk {index + 1} processing failed", 0)
+                        raise
+                    record_persisted(index, episode_id, persisted_in)
+                    if next_index < total_chunks:
+                        pending.append((next_index, pool.submit(extract_one, chunks[next_index])))
+                        next_index += 1
+            logger.info(
+                "[graph_build] Stage timings: extraction_sum=%.3fs persistence_sum=%.3fs",
+                extraction_seconds, persistence_seconds,
+            )
+
+        logger.info("[graph_build] All %d chunks processed successfully", total_chunks)
         return episode_uuids
 
     def _get_graph_info(self, graph_id: str) -> GraphInfo:
