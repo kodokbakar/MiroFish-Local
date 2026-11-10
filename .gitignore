@@ -61,6 +61,7 @@ backend/logs/
 
 # 上传文件
 backend/uploads/
+private-data/
 
 # Docker 数据
 data/backend/venv311/

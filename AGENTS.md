@@ -64,7 +64,7 @@ OASIS), and record modifications.
      `debugger` (reproduces, commits 1 failing test) $\rightarrow$ `developer` (fixes root cause) $\rightarrow$ `reviewer` $\rightarrow$ `tester`
    - **On-Demand Technical Research:**
      Call `researcher` whenever architectural questions, upstream API behaviors, or Neo4j trade-offs require investigation before implementation.
-4. Reviewer verdict is `APPROVE` or `CHANGES(list)`. Maximum 3 developer<->reviewer rounds,
+4. Reviewer verdict is `APPROVE` or `CHANGES(list)`. Maximum 5 developer<->reviewer rounds,
    then stop and escalate to the owner with a short summary.
 5. After each stage, run `git status --short`, `git stash list`, and `git diff --stat`.
    `git stash list` must be empty and only expected files may have changed (`tester` & `debugger`: test files only).
