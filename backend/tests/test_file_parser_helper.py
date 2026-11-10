@@ -51,7 +51,7 @@ class TestFileParserIsSupported:
         assert FileParser.is_supported(file_path) is False
 
     def test_supported_extensions_set(self):
-        assert FileParser.SUPPORTED_EXTENSIONS == {".pdf", ".md", ".markdown", ".txt"}
+        assert FileParser.SUPPORTED_EXTENSIONS == {".pdf", ".md", ".markdown", ".txt", ".csv", ".json"}
 
 
 class TestConfigValidate:
