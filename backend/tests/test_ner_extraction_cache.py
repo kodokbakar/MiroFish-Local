@@ -93,12 +93,12 @@ def test_failed_or_incomplete_extraction_is_not_cached(tmp_path):
         def chat_json(self, **kwargs):
             self.calls += 1
             if self.calls <= 2:
-                raise RuntimeError("provider failed with sensitive content")
+                raise TimeoutError("provider failed with sensitive content")
             return RESULT
 
     llm = FlakyLLM()
     extractor = NERExtractor(llm, max_retries=1, cache_dir=tmp_path)
-    with pytest.raises(NERExtractionError, match="NER extraction failed after retries"):
+    with pytest.raises(NERExtractionError, match="NER extraction failed"):
         extractor.extract("Alice knows Bob", ONTOLOGY)
     assert not list(tmp_path.glob("*.json"))
     assert extractor.extract("Alice knows Bob", ONTOLOGY) == RESULT
@@ -106,7 +106,7 @@ def test_failed_or_incomplete_extraction_is_not_cached(tmp_path):
 
     invalid = FakeLLM({"entities": []})
     invalid_extractor = NERExtractor(invalid, max_retries=0, cache_dir=tmp_path / "invalid")
-    with pytest.raises(NERExtractionError, match="NER extraction failed after retries"):
+    with pytest.raises(NERExtractionError, match="NER extraction failed"):
         invalid_extractor.extract("incomplete", ONTOLOGY)
     assert not list((tmp_path / "invalid").glob("*.json"))
 
@@ -132,7 +132,7 @@ def test_null_or_invalid_attributes_keep_previous_empty_dict_behavior(tmp_path, 
 def test_incomplete_raw_records_fail_instead_of_becoming_cached_empty(tmp_path, invalid_result):
     llm = FakeLLM(invalid_result)
     extractor = NERExtractor(llm, max_retries=1, cache_dir=tmp_path)
-    with pytest.raises(NERExtractionError, match="NER extraction failed after retries"):
+    with pytest.raises(NERExtractionError, match="NER extraction failed"):
         extractor.extract("Alice arrives", ONTOLOGY)
     assert llm.calls == 2
     assert not list(tmp_path.glob("*.json"))
@@ -193,7 +193,7 @@ def test_cache_hit_still_creates_graph_specific_episodes_and_embeddings(tmp_path
     assert ("graph-two", "alice") in driver.entities
 
 
-def test_failed_extraction_is_not_cached_and_add_text_keeps_empty_fallback(tmp_path):
+def test_failed_extraction_is_not_cached_or_persisted(tmp_path):
     class FailedLLM(FakeLLM):
         def chat_json(self, **kwargs):
             self.calls += 1
@@ -213,11 +213,10 @@ def test_failed_extraction_is_not_cached_and_add_text_keeps_empty_fallback(tmp_p
         extractor.extract("failed chunk", ONTOLOGY)
     assert not list(tmp_path.glob("*.json"))
 
-    # The legacy serial add_text path still persists a new episode with no entities.
-    episode_id = storage.add_text("graph-one", "failed chunk", ontology=ONTOLOGY)
-    assert episode_id
-    assert len(driver.episodes) == 1
-    assert driver.episodes[0]["graph_id"] == "graph-one"
+    # Failed extraction aborts ingestion instead of persisting an empty episode.
+    with pytest.raises(NERExtractionError):
+        storage.add_text("graph-one", "failed chunk", ontology=ONTOLOGY)
+    assert not driver.episodes
     assert not driver.entities
     assert llm.calls == 2
     assert not list(tmp_path.glob("*.json"))

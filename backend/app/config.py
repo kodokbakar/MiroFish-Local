@@ -31,6 +31,7 @@ class Config:
     LLM_API_KEY = os.environ.get('LLM_API_KEY')
     LLM_BASE_URL = os.environ.get('LLM_BASE_URL', 'http://localhost:11434/v1')
     LLM_MODEL_NAME = os.environ.get('LLM_MODEL_NAME', 'qwen2.5:32b')
+    NER_EXTRACTION_WORKERS = int(os.environ.get('NER_EXTRACTION_WORKERS', '1'))
 
     # Neo4j configuration
     NEO4J_URI = os.environ.get('NEO4J_URI', 'bolt://localhost:7687')
@@ -50,7 +51,7 @@ class Config:
     # File upload configuration
     MAX_CONTENT_LENGTH = 50 * 1024 * 1024  # 50MB
     UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), '../uploads')
-    ALLOWED_EXTENSIONS = {'pdf', 'md', 'txt', 'markdown'}
+    ALLOWED_EXTENSIONS = {'pdf', 'md', 'txt', 'markdown', 'csv', 'json'}
 
     # Text processing configuration
     DEFAULT_CHUNK_SIZE = 500  # Default chunk size

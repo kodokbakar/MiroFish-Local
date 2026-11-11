@@ -9,8 +9,11 @@ entities and relations from text chunks, guided by the graph's ontology.
 import hashlib
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Dict, Any, Optional
+
+from openai import APIConnectionError, APITimeoutError
 
 from ..config import Config
 from ..utils.llm_client import LLMClient
@@ -18,6 +21,13 @@ from .extraction_cache import ExtractionCache, is_valid_extraction
 from .label_utils import is_valid_label
 
 logger = logging.getLogger('mirofish.ner_extractor')
+
+
+def _retryable_extraction_error(error: Exception) -> bool:
+    status = getattr(error, "status_code", None)
+    if isinstance(status, int):
+        return status == 429 or 500 <= status < 600
+    return isinstance(error, (ValueError, APIConnectionError, APITimeoutError, TimeoutError, ConnectionError, OSError))
 
 # System prompt template for NER/RE extraction
 _SYSTEM_PROMPT = """You are a Named Entity Recognition and Relation Extraction system.
@@ -62,6 +72,8 @@ class NERExtractor:
 
     def __init__(self, llm_client: Optional[LLMClient] = None, max_retries: int = 2,
                  cache_dir: Optional[str | Path] = None):
+        if max_retries < 0:
+            raise ValueError("max_retries must be nonnegative")
         self.llm = llm_client or LLMClient()
         self.max_retries = max_retries
         self.cache = ExtractionCache(cache_dir or Path(Config.UPLOAD_FOLDER) / "ner_cache")
@@ -127,7 +139,6 @@ class NERExtractor:
             {"role": "user", "content": user_msg},
         ]
 
-        last_error = None
         for attempt in range(self.max_retries + 1):
             try:
                 result = self.llm.chat_json(
@@ -143,27 +154,22 @@ class NERExtractor:
                 if cache_key is not None:
                     self.cache.put(cache_key, cleaned)
                 return cleaned
-
-            except ValueError as e:
-                last_error = e
+            except Exception as error:
+                status = getattr(error, "status_code", None)
+                retryable = _retryable_extraction_error(error)
                 logger.warning(
-                    "NER extraction failed (attempt %s): invalid response (%s)",
-                    attempt + 1, type(e).__name__,
+                    "NER extraction attempt %d/%d failed: type=%s status=%s retryable=%s",
+                    attempt + 1, self.max_retries + 1, type(error).__name__,
+                    status if isinstance(status, int) else "unknown", retryable,
                 )
-            except Exception as e:
-                last_error = e
-                logger.error("NER extraction error (attempt %s): %s", attempt + 1, type(e).__name__)
-                if attempt >= self.max_retries:
-                    break
-
-        logger.error("NER extraction failed after %s attempts", self.max_retries + 1)
-        raise NERExtractionError(
-            f"NER extraction failed after retries ({type(last_error).__name__})"
-        ) from None
+                if not retryable or attempt >= self.max_retries:
+                    detail = f"HTTP {status}" if isinstance(status, int) else type(error).__name__
+                    raise NERExtractionError(f"NER extraction failed ({detail})") from None
+                time.sleep(min(2 ** attempt, 4))
 
     @staticmethod
     def _valid_raw_result(result: Any) -> bool:
-        """Catch incomplete LLM output before normalization could discard it."""
+        """Reject malformed records before normalization can discard them."""
         if not isinstance(result, dict):
             return False
         entities = result.get("entities")
@@ -181,6 +187,7 @@ class NERExtractor:
             if not all(isinstance(relation.get(key), str) and relation[key].strip() for key in ("source", "target", "type", "fact")):
                 return False
         return True
+
 
     def _format_ontology(self, ontology: Dict[str, Any]) -> str:
         """Format ontology dict into readable text for the LLM prompt."""
