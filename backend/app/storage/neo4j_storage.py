@@ -23,7 +23,7 @@ from neo4j.exceptions import (
 from ..config import Config
 from .graph_storage import GraphStorage
 from .embedding_service import EmbeddingService
-from .ner_extractor import NERExtractor
+from .ner_extractor import NERExtractor, NERExtractionError
 from .search_service import SearchService
 from .neo4j_records import edge_to_dict, node_to_dict
 from . import neo4j_schema
@@ -250,7 +250,13 @@ class Neo4jStorage(GraphStorage):
 
         # Extract entities and relations
         logger.info(f"[add_text] Starting NER extraction for chunk ({len(text)} chars)...")
-        extraction = self._ner.extract(text, ontology)
+        try:
+            extraction = self._ner.extract(text, ontology)
+        except NERExtractionError as error:
+            # Preserve serial add_text's historical empty-extraction fallback.
+            # The explicit extract_text API still propagates failures to parallel builds.
+            logger.warning("[add_text] NER extraction failed (%s); persisting empty extraction", type(error).__name__)
+            extraction = {"entities": [], "relations": []}
         entities = extraction.get("entities", [])
         relations = extraction.get("relations", [])
 
