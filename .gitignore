@@ -50,6 +50,8 @@ htmlcov/
 .omp/*
 !.omp/agents/
 !.omp/config.yml
+.opencode/*
+!.opencode/agents/
 
 # 文档与测试程序
 mydoc/

@@ -37,22 +37,22 @@ OASIS), and record modifications.
 | Role | Primary Responsibility | Permissions & Boundary |
 |---|---|---|
 | `planner` | Technical scoping and acceptance criteria formulation | Read-only across repository; never writes code |
-| `debugger` | Bug reproduction, root-cause isolation, and failing test authoring via Codex CLI (`codex exec`) | Read-only on production code; writable only in `backend/tests/` or `frontend/tests/` |
+| `debugger` | Bug reproduction, root-cause isolation, and failing test authoring | Read-only on production code; writable only in `backend/tests/` or `frontend/tests/` |
 | `developer` | Implementation of feature or fix in assigned worktree | Writable in current worktree; minimal diff; no drive-by refactors |
-| `reviewer` | Evidence-based review against intent, AGENTS.md, and Neo4j rules via Codex CLI (`codex exec review`) | Read-only; bash only for diff/test inspection; verdict `APPROVE` or `CHANGES` |
-| `tester` | Independent test execution (`uv run pytest`, `ruff`, build checks) and edge-case generation via Codex CLI (`codex exec`) | Read-only on production code; writable only in test directories; verdict `PASS` or `FAIL` |
+| `reviewer` | Evidence-based review against intent, AGENTS.md, and Neo4j rules | Read-only; bash only for diff/test inspection; verdict `APPROVE` or `CHANGES` |
+| `tester` | Independent test execution (`uv run pytest`, `ruff`, build checks) and edge-case generation | Read-only on production code; writable only in test directories; verdict `PASS` or `FAIL` |
 | `integrator` | Merges approved item branch into main and cleans worktree | Acts strictly after owner approval |
 | `researcher` | On-demand technical question answering with citations and trade-offs | Read-only; no state changes |
 | `upstream-analyst` | Upstream commit classification and portability analysis | Read-only |
 | `graph-migration` | Neo4j schema, vector index, and embedding migrations | Specialized for Neo4j database migrations |
 | `docs-writer` | Documentation updates (README, LEDGER, guides) | Documentation files only, invoked after `APPROVE` |
 
-## Codex CLI Delegation (Supervisor-Delegator Model)
-`reviewer`, `debugger`, and `tester` operate as OMP supervisor agents that delegate deep execution to **Codex CLI (`codex exec`)** via their `bash` tool inside `$WORKTREE`:
-- **`reviewer`**: Runs `codex exec review --base origin/main` to audit diffs against AGENTS.md and MiroFish Neo4j rules.
-- **`debugger`**: Runs `codex exec -s workspace-write` to reproduce bugs and commit exactly 1 failing regression test in `backend/tests/` (production code is strictly read-only).
-- **`tester`**: Runs `codex exec -s workspace-write` to execute `uv run pytest`, `uv run ruff`, and add edge-case tests in `backend/tests/`.
-- **Supervisor Gate**: After Codex completes, the supervisor checks `git status --porcelain` and diffs to guarantee no production code was modified and no forbidden git operations (`git stash`, `git reset`) were run.
+## Execution & Boundary Model
+`reviewer`, `debugger`, and `tester` operate directly within `$WORKTREE` under strict boundaries:
+- **`reviewer`**: Audits diffs against `AGENTS.md` and MiroFish Neo4j rules via read-only tools and inspection commands (`git diff origin/main...HEAD`).
+- **`debugger`**: Reproduces bugs and commits exactly 1 failing regression test in `backend/tests/` (production code is strictly read-only).
+- **`tester`**: Executes `uv run pytest`, `uv run ruff`, and adds edge-case tests in `backend/tests/` (production code is strictly read-only).
+- **Integrity Gate**: After execution, inspect `git status --porcelain` and diffs to guarantee no production code was modified and no forbidden git operations (`git stash`, `git reset`) were run.
 
 ## Orchestrator protocol (main omp session)
 1. Read `docs/porting/LEDGER.md`. Pick the next `pending` item.
