@@ -33,6 +33,16 @@ class GraphStorage(ABC):
     # --- Add data ---
 
     @abstractmethod
+    def extract_text(self, text: str, ontology: Dict[str, Any]) -> Dict[str, Any]:
+        """Run NER/RE without embeddings or graph writes. May use an extraction cache."""
+
+    @abstractmethod
+    def persist_extraction(
+        self, graph_id: str, text: str, extraction: Dict[str, Any]
+    ) -> str:
+        """Embed and persist one extracted chunk; return its new episode ID."""
+
+    @abstractmethod
     def add_text(
         self,
         graph_id: str,

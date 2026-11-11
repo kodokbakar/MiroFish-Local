@@ -7,12 +7,26 @@ entities and relations from text chunks, guided by the graph's ontology.
 """
 
 import logging
-from typing import Dict, Any, List, Optional
+import time
+from typing import Dict, Any, Optional
+
+from openai import APIConnectionError, APITimeoutError
 
 from ..utils.llm_client import LLMClient
-from .label_utils import LABEL_PATTERN, is_valid_label
+from .label_utils import is_valid_label
 
 logger = logging.getLogger('mirofish.ner_extractor')
+
+
+class NERExtractionError(RuntimeError):
+    """Safe public error for an unsuccessful extraction."""
+
+
+def _retryable_extraction_error(error: Exception) -> bool:
+    status = getattr(error, "status_code", None)
+    if isinstance(status, int):
+        return status == 429 or 500 <= status < 600
+    return isinstance(error, (ValueError, APIConnectionError, APITimeoutError, TimeoutError, ConnectionError, OSError))
 
 # System prompt template for NER/RE extraction
 _SYSTEM_PROMPT = """You are a Named Entity Recognition and Relation Extraction system.
@@ -48,6 +62,8 @@ class NERExtractor:
     """Extract entities and relations from text using local LLM."""
 
     def __init__(self, llm_client: Optional[LLMClient] = None, max_retries: int = 2):
+        if max_retries < 0:
+            raise ValueError("max_retries must be nonnegative")
         self.llm = llm_client or LLMClient()
         self.max_retries = max_retries
 
@@ -78,7 +94,6 @@ class NERExtractor:
             {"role": "user", "content": user_msg},
         ]
 
-        last_error = None
         for attempt in range(self.max_retries + 1):
             try:
                 result = self.llm.chat_json(
@@ -86,23 +101,42 @@ class NERExtractor:
                     temperature=0.1,  # Low temp for extraction precision
                     max_tokens=4096,
                 )
+                self._validate_response_shape(result)
                 return self._validate_and_clean(result, ontology)
-
-            except ValueError as e:
-                last_error = e
-                logger.warning(
-                    f"NER extraction failed (attempt {attempt + 1}): invalid JSON — {e}"
-                )
             except Exception as e:
-                last_error = e
-                logger.error(f"NER extraction error: {e}")
-                if attempt >= self.max_retries:
-                    break
+                status = getattr(e, "status_code", None)
+                retryable = _retryable_extraction_error(e)
+                logger.warning(
+                    "NER extraction attempt %d/%d failed: type=%s status=%s retryable=%s",
+                    attempt + 1, self.max_retries + 1, type(e).__name__,
+                    status if isinstance(status, int) else "unknown", retryable,
+                )
+                if not retryable or attempt >= self.max_retries:
+                    detail = f"HTTP {status}" if isinstance(status, int) else type(e).__name__
+                    raise NERExtractionError(f"NER extraction failed ({detail})") from None
+                time.sleep(min(2 ** attempt, 4))
 
-        logger.error(
-            f"NER extraction failed after {self.max_retries + 1} attempts: {last_error}"
-        )
-        return {"entities": [], "relations": []}
+    @staticmethod
+    def _validate_response_shape(result: Any) -> None:
+        """Reject incomplete LLM output before normalization can drop fields."""
+        if not isinstance(result, dict) or set(("entities", "relations")) - result.keys():
+            raise ValueError("NER response must contain entities and relations")
+        entities = result["entities"]
+        relations = result["relations"]
+        if not isinstance(entities, list) or not isinstance(relations, list):
+            raise ValueError("NER entities and relations must be lists")
+        for entity in entities:
+            if not isinstance(entity, dict) or not all(
+                isinstance(entity.get(key), str) and entity[key].strip()
+                for key in ("name", "type")
+            ) or not isinstance(entity.get("attributes", {}), dict):
+                raise ValueError("NER entity is incomplete")
+        for relation in relations:
+            if not isinstance(relation, dict) or not all(
+                isinstance(relation.get(key), str) and relation[key].strip()
+                for key in ("source", "target", "type")
+            ):
+                raise ValueError("NER relation is incomplete")
 
     def _format_ontology(self, ontology: Dict[str, Any]) -> str:
         """Format ontology dict into readable text for the LLM prompt."""
