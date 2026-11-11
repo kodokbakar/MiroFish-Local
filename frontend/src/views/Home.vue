@@ -90,7 +90,7 @@
             <div :style="s.consoleSection">
               <div class="console-header" :style="s.consoleHeader">
                 <span>01 / Reality Seeds</span>
-                <span>Supported: PDF, MD, TXT</span>
+                <span>Supported: PDF, MD, TXT, CSV, JSON</span>
               </div>
               <div
                 :style="s.uploadZone"
@@ -99,7 +99,7 @@
                 @drop.prevent="handleDrop"
                 @click="triggerFileInput"
               >
-                <input ref="fileInput" type="file" multiple accept=".pdf,.md,.txt" @change="handleFileSelect" style="display: none" :disabled="loading" />
+                <input ref="fileInput" type="file" multiple accept=".pdf,.md,.markdown,.txt,.csv,.json" @change="handleFileSelect" style="display: none" :disabled="loading" />
                 <div v-if="files.length === 0" :style="s.uploadPlaceholder">
                   <div :style="s.uploadIcon">↑</div>
                   <div :style="s.uploadTitle">Drag & drop files here</div>
@@ -245,7 +245,7 @@ const handleDragLeave = (e) => { isDragOver.value = false }
 const handleDrop = (e) => { isDragOver.value = false; addFiles(Array.from(e.dataTransfer.files)) }
 
 const addFiles = (newFiles) => {
-  const allowed = ['.pdf', '.md', '.txt']
+  const allowed = ['.pdf', '.md', '.markdown', '.txt', '.csv', '.json']
   const valid = newFiles.filter(f => allowed.some(ext => f.name.toLowerCase().endsWith(ext)))
   files.value = [...files.value, ...valid]
 }

@@ -3,7 +3,9 @@ File Parser Utility
 Supports text extraction from PDF, Markdown, TXT files
 """
 
-import os
+import csv
+import io
+import json
 from pathlib import Path
 from typing import List, Optional
 
@@ -61,7 +63,7 @@ def _read_text_with_fallback(file_path: str) -> str:
 class FileParser:
     """File Parser"""
 
-    SUPPORTED_EXTENSIONS = {'.pdf', '.md', '.markdown', '.txt'}
+    SUPPORTED_EXTENSIONS = {'.pdf', '.md', '.markdown', '.txt', '.csv', '.json'}
 
     @classmethod
     def is_supported(cls, file_path: str) -> bool:
@@ -104,6 +106,9 @@ class FileParser:
             return cls._extract_from_md(file_path)
         elif suffix == '.txt':
             return cls._extract_from_txt(file_path)
+        elif suffix in {'.csv', '.json'}:
+            headers, records = cls.parse_table(file_path)
+            return cls.format_table(path.name, headers, records)
 
         raise ValueError(f"Cannot handle file format: {suffix}")
 
@@ -133,6 +138,60 @@ class FileParser:
     def _extract_from_txt(file_path: str) -> str:
         """Extract text from TXT with automatic encoding detection"""
         return _read_text_with_fallback(file_path)
+
+    @staticmethod
+    def parse_table(file_path: str) -> tuple[List[str], List[dict]]:
+        """Read a CSV or JSON record collection, rejecting ambiguous or empty data."""
+        path = Path(file_path)
+        try:
+            content = path.read_text(encoding='utf-8-sig')
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"Invalid UTF-8 in {path.name}") from exc
+        if not content.strip():
+            raise ValueError(f"Empty table file: {path.name}")
+
+        if path.suffix.lower() == '.csv':
+            try:
+                reader = csv.reader(io.StringIO(content, newline=''), strict=True)
+                headers = next(reader)
+                if not headers or any(not name.strip() for name in headers):
+                    raise ValueError("CSV header must contain nonempty column names")
+                if len(set(headers)) != len(headers):
+                    raise ValueError("CSV header contains duplicate column names")
+                records = []
+                for number, values in enumerate(reader, 2):
+                    if len(values) != len(headers):
+                        raise ValueError(f"CSV record {number} has {len(values)} fields; expected {len(headers)}")
+                    records.append(dict(zip(headers, values)))
+            except (csv.Error, StopIteration) as exc:
+                raise ValueError(f"Malformed CSV in {path.name}: {exc}") from exc
+        elif path.suffix.lower() == '.json':
+            try:
+                data = json.loads(content)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"Malformed JSON in {path.name}: {exc.msg}") from exc
+            if isinstance(data, dict):
+                data = data.get('records')
+            if not isinstance(data, list) or not data or any(not isinstance(row, dict) or not row for row in data):
+                raise ValueError("JSON must be a nonempty array of records or an object with a records array")
+            if any(any(not isinstance(key, str) or not key.strip() for key in row) for row in data):
+                raise ValueError("JSON record field names must be nonempty strings")
+            headers = list(dict.fromkeys(key for row in data for key in row))
+            records = data
+        else:
+            raise ValueError(f"Unsupported table format: {path.suffix}")
+
+        if not records:
+            raise ValueError(f"Table has no records: {path.name}")
+        return headers, records
+
+    @staticmethod
+    def format_table(source: str, headers: List[str], records: List[dict]) -> str:
+        lines = [f"Source: {source}", f"Columns: {', '.join(headers)}"]
+        for number, record in enumerate(records, 1):
+            fields = ', '.join(f"{key}: {json.dumps(record.get(key), ensure_ascii=False)}" for key in headers)
+            lines.append(f"Record {number}: {fields}")
+        return '\n'.join(lines)
 
     @classmethod
     def extract_from_multiple(cls, file_paths: List[str]) -> str:

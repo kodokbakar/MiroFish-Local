@@ -135,7 +135,7 @@ def generate_ontology():
     Request method: multipart/form-data
 
     Parameters:
-        files: Uploaded files (PDF/MD/TXT), multiple allowed
+        files: Uploaded files (PDF/MD/TXT/CSV/JSON), multiple allowed
         simulation_requirement: Simulation requirement description (required)
         project_name: Project name (optional)
         additional_context: Additional notes (optional)
@@ -198,13 +198,24 @@ def generate_ontology():
                     file,
                     file.filename
                 )
+                # Extract text
+                try:
+                    if file_info["saved_filename"].endswith(('.csv', '.json')):
+                        headers, records = FileParser.parse_table(file_info["path"])
+                        text = FileParser.format_table(file_info["original_filename"], headers, records)
+                    else:
+                        text = FileParser.extract_text(file_info["path"])
+                except ValueError as exc:
+                    ProjectManager.delete_project(project.project_id)
+                    return jsonify({"success": False, "error": str(exc)}), 400
+                if not text.strip():
+                    ProjectManager.delete_project(project.project_id)
+                    return jsonify({"success": False, "error": f"Empty document: {file.filename}"}), 400
                 project.files.append({
                     "filename": file_info["original_filename"],
+                    "saved_filename": file_info["saved_filename"],
                     "size": file_info["size"]
                 })
-
-                # Extract text
-                text = FileParser.extract_text(file_info["path"])
                 text = TextProcessor.preprocess_text(text)
                 document_texts.append(text)
                 all_text += f"\n\n=== {file_info['original_filename']} ===\n{text}"
@@ -424,6 +435,13 @@ def build_graph():
                 "error": "Ontology definition not found"
             }), 400
 
+        table_chunks = None
+        if any(file.get('filename', '').lower().endswith(('.csv', '.json')) for file in project.files):
+            try:
+                table_chunks = TextProcessor.split_project_files(project_id, project.files, chunk_size, chunk_overlap)
+            except ValueError as exc:
+                return jsonify({"success": False, "error": str(exc)}), 400
+
         # Get storage in request context (background thread cannot access current_app)
         storage = _get_storage()
 
@@ -457,11 +475,7 @@ def build_graph():
                     message="Chunking text...",
                     progress=5
                 )
-                chunks = TextProcessor.split_text(
-                    text,
-                    chunk_size=chunk_size,
-                    overlap=chunk_overlap
-                )
+                chunks = table_chunks if table_chunks is not None else TextProcessor.split_text(text, chunk_size=chunk_size, overlap=chunk_overlap)
                 total_chunks = len(chunks)
 
                 # Create graph
