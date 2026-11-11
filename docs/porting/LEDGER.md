@@ -66,7 +66,7 @@ Only the orchestrator edits this file.
 | 047 | - | Issue #37: prevent entity vector embedding erasure during Cypher UNWIND MERGE | bugfix | direct | low | ported | PR #56 (`5334f9f`) | Conditionally preserve n.embedding on MATCH in add_text UNWIND MERGE; 781 tests passed. |
 | 048 | - | Issue #57: CSV/JSON uploads with table-aware chunking | feature | adapt | medium | ported | PR #60 (`port/048`, merged) | CSV/JSON parsing and table-aware graph chunks implemented; invalid or unchunkable input gets HTTP 400 before graph task; reviewer APPROVE, tester PASS, 812 backend and 7 frontend tests plus build pass. |
 | 049 | - | Issue #58: cache NER extraction results across graph builds | feature | adapt | medium | ported | PR #62 (`port/049`) | Local atomic cache for successful validated extraction; graph episodes/embeddings still created on hits; reviewer APPROVE, tester PASS, 805 backend tests pass. Scoped Ruff retains two pre-existing findings in neo4j_storage.py. |
-| 050 | - | Issue #59: parallelize NER extraction with bounded concurrency | perf | adapt | high | ported | PR #61 (`port/050`) | Bounded NER workers (default 1), ordered serial persistence, bounded retries, and synthetic benchmark; reviewer APPROVE, tester PASS, 805 backend tests pass. |
+| 050 | - | Issue #59: parallelize NER extraction with bounded concurrency | perf | adapt | high | ported | PR #61 (`port/050`, merged) | Bounded NER workers (default 1), ordered serial persistence, bounded retries, and synthetic benchmark; reviewer APPROVE, tester PASS, 805 backend tests pass. |
 
 ## Skipped (with reason)
 | Upstream commit | Reason |

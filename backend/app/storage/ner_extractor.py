@@ -6,20 +6,21 @@ Uses LLMClient.chat_json() with a structured prompt to extract
 entities and relations from text chunks, guided by the graph's ontology.
 """
 
+import hashlib
+import json
 import logging
 import time
+from pathlib import Path
 from typing import Dict, Any, Optional
 
 from openai import APIConnectionError, APITimeoutError
 
+from ..config import Config
 from ..utils.llm_client import LLMClient
+from .extraction_cache import ExtractionCache, is_valid_extraction
 from .label_utils import is_valid_label
 
 logger = logging.getLogger('mirofish.ner_extractor')
-
-
-class NERExtractionError(RuntimeError):
-    """Safe public error for an unsuccessful extraction."""
 
 
 def _retryable_extraction_error(error: Exception) -> bool:
@@ -57,15 +58,53 @@ _USER_PROMPT = """Extract entities and relations from the following text:
 
 {text}"""
 
+EXTRACTION_SCHEMA_VERSION = 1
+EXTRACTION_TEMPERATURE = 0.1
+EXTRACTION_MAX_TOKENS = 4096
+
+
+class NERExtractionError(RuntimeError):
+    """Raised when the provider cannot produce a valid extraction."""
+
 
 class NERExtractor:
     """Extract entities and relations from text using local LLM."""
 
-    def __init__(self, llm_client: Optional[LLMClient] = None, max_retries: int = 2):
+    def __init__(self, llm_client: Optional[LLMClient] = None, max_retries: int = 2,
+                 cache_dir: Optional[str | Path] = None):
         if max_retries < 0:
             raise ValueError("max_retries must be nonnegative")
         self.llm = llm_client or LLMClient()
         self.max_retries = max_retries
+        self.cache = ExtractionCache(cache_dir or Path(Config.UPLOAD_FOLDER) / "ner_cache")
+
+    def _cache_key(self, text: str, ontology: Dict[str, Any]) -> Optional[str]:
+        """Hash all effective extraction inputs without persisting credentials or text."""
+        base_url = getattr(self.llm, "base_url", None)
+        model = getattr(self.llm, "model", None)
+        if not isinstance(base_url, str) or not base_url or not isinstance(model, str) or not model:
+            # Unknown injected client identity must not reuse another provider's output.
+            return None
+        payload = {
+            "text": text.strip(),
+            "ontology": ontology,
+            "provider": f"{type(self.llm).__module__}.{type(self.llm).__qualname__}",
+            "base_url": base_url,
+            "model": model,
+            "system_prompt": _SYSTEM_PROMPT,
+            "user_prompt": _USER_PROMPT,
+            "temperature": EXTRACTION_TEMPERATURE,
+            "max_tokens": EXTRACTION_MAX_TOKENS,
+            "json_mode": "json_object_with_explicit_unsupported_fallback",
+            "ollama_num_ctx": getattr(self.llm, "_num_ctx", None) if "11434" in base_url else None,
+            "max_retries": self.max_retries,
+            "schema_version": EXTRACTION_SCHEMA_VERSION,
+        }
+        try:
+            canonical = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        except (TypeError, ValueError):
+            return None
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
     def extract(self, text: str, ontology: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -85,6 +124,12 @@ class NERExtractor:
         if not text or not text.strip():
             return {"entities": [], "relations": []}
 
+        cache_key = self._cache_key(text, ontology)
+        if cache_key is not None:
+            cached = self.cache.get(cache_key)
+            if cached is not None:
+                return cached
+
         ontology_desc = self._format_ontology(ontology)
         system_msg = _SYSTEM_PROMPT.format(ontology_description=ontology_desc)
         user_msg = _USER_PROMPT.format(text=text.strip())
@@ -98,45 +143,51 @@ class NERExtractor:
             try:
                 result = self.llm.chat_json(
                     messages=messages,
-                    temperature=0.1,  # Low temp for extraction precision
-                    max_tokens=4096,
+                    temperature=EXTRACTION_TEMPERATURE,
+                    max_tokens=EXTRACTION_MAX_TOKENS,
                 )
-                self._validate_response_shape(result)
-                return self._validate_and_clean(result, ontology)
-            except Exception as e:
-                status = getattr(e, "status_code", None)
-                retryable = _retryable_extraction_error(e)
+                if not self._valid_raw_result(result):
+                    raise ValueError("NER response contains incomplete entities or relations")
+                cleaned = self._validate_and_clean(result, ontology)
+                if not is_valid_extraction(cleaned):
+                    raise ValueError("NER response contains invalid entities or relations")
+                if cache_key is not None:
+                    self.cache.put(cache_key, cleaned)
+                return cleaned
+            except Exception as error:
+                status = getattr(error, "status_code", None)
+                retryable = _retryable_extraction_error(error)
                 logger.warning(
                     "NER extraction attempt %d/%d failed: type=%s status=%s retryable=%s",
-                    attempt + 1, self.max_retries + 1, type(e).__name__,
+                    attempt + 1, self.max_retries + 1, type(error).__name__,
                     status if isinstance(status, int) else "unknown", retryable,
                 )
                 if not retryable or attempt >= self.max_retries:
-                    detail = f"HTTP {status}" if isinstance(status, int) else type(e).__name__
+                    detail = f"HTTP {status}" if isinstance(status, int) else type(error).__name__
                     raise NERExtractionError(f"NER extraction failed ({detail})") from None
                 time.sleep(min(2 ** attempt, 4))
 
     @staticmethod
-    def _validate_response_shape(result: Any) -> None:
-        """Reject incomplete LLM output before normalization can drop fields."""
-        if not isinstance(result, dict) or set(("entities", "relations")) - result.keys():
-            raise ValueError("NER response must contain entities and relations")
-        entities = result["entities"]
-        relations = result["relations"]
+    def _valid_raw_result(result: Any) -> bool:
+        """Reject malformed records before normalization can discard them."""
+        if not isinstance(result, dict):
+            return False
+        entities = result.get("entities")
+        relations = result.get("relations")
         if not isinstance(entities, list) or not isinstance(relations, list):
-            raise ValueError("NER entities and relations must be lists")
+            return False
         for entity in entities:
-            if not isinstance(entity, dict) or not all(
-                isinstance(entity.get(key), str) and entity[key].strip()
-                for key in ("name", "type")
-            ) or not isinstance(entity.get("attributes", {}), dict):
-                raise ValueError("NER entity is incomplete")
+            if not isinstance(entity, dict):
+                return False
+            if not all(isinstance(entity.get(key), str) and entity[key].strip() for key in ("name", "type")):
+                return False
         for relation in relations:
-            if not isinstance(relation, dict) or not all(
-                isinstance(relation.get(key), str) and relation[key].strip()
-                for key in ("source", "target", "type")
-            ):
-                raise ValueError("NER relation is incomplete")
+            if not isinstance(relation, dict):
+                return False
+            if not all(isinstance(relation.get(key), str) and relation[key].strip() for key in ("source", "target", "type", "fact")):
+                return False
+        return True
+
 
     def _format_ontology(self, ontology: Dict[str, Any]) -> str:
         """Format ontology dict into readable text for the LLM prompt."""
@@ -233,7 +284,7 @@ class NERExtractor:
             cleaned_entities.append({
                 "name": name,
                 "type": etype,
-                "attributes": entity.get("attributes", {}),
+                "attributes": entity.get("attributes") if isinstance(entity.get("attributes"), dict) else {},
             })
 
         # Clean relations
