@@ -7,15 +7,58 @@ Supports Ollama num_ctx parameter to prevent prompt truncation
 import json
 import logging
 import os
+import random
 import re
+import time
 from typing import Optional, Dict, Any, List
-from openai import OpenAI
+from openai import (
+    OpenAI,
+    RateLimitError,
+    APIConnectionError,
+    APITimeoutError,
+    InternalServerError,
+)
 
 from ..config import Config
 from .openai_chat_compat import create_chat_completion, extract_chat_completion_text
 
 
 logger = logging.getLogger(__name__)
+
+
+def _is_retryable_error(error: Exception) -> bool:
+    """Check if an API error is transient and safe to retry with backoff."""
+    return isinstance(
+        error,
+        (RateLimitError, APIConnectionError, APITimeoutError, InternalServerError),
+    )
+
+
+def _get_retry_wait(
+    error: Exception,
+    attempt: int,
+    min_wait: float = 1.0,
+    max_wait: float = 60.0,
+) -> float:
+    """Calculate backoff duration with full jitter and Retry-After support."""
+    response = getattr(error, "response", None)
+    if response is not None:
+        headers = getattr(response, "headers", None)
+        if headers:
+            retry_after = headers.get("retry-after") or headers.get("retry-after-ms")
+            if retry_after:
+                try:
+                    val = float(retry_after)
+                    if headers.get("retry-after-ms") and not headers.get("retry-after"):
+                        val /= 1000.0
+                    return max(val, min_wait)
+                except ValueError:
+                    pass
+
+    base_backoff = min_wait * (2 ** attempt)
+    jitter = random.uniform(0.0, 1.0)
+    wait_time = min(base_backoff + jitter, max_wait)
+    return max(wait_time, min_wait)
 
 
 class LLMResponseError(ValueError):
@@ -128,8 +171,11 @@ class LLMClient:
         temperature: Optional[float],
         max_tokens: Optional[int],
         response_format: Optional[Dict[str, Any]],
+        max_retries: int = 5,
+        min_retry_wait: float = 1.0,
+        max_retry_wait: float = 60.0,
     ) -> Any:
-        """Send one raw Chat Completions request through the compatibility layer."""
+        """Send one raw Chat Completions request through the compatibility layer with retry on transient errors."""
         extra_params = None
         # For Ollama: pass num_ctx via extra_body to prevent prompt truncation
         if self._is_ollama() and getattr(self, "_num_ctx", None):
@@ -139,15 +185,36 @@ class LLMClient:
                 }
             }
 
-        return create_chat_completion(
-            self.client,
-            model=self.model,
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            response_format=response_format,
-            extra_params=extra_params,
-        )
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                return create_chat_completion(
+                    self.client,
+                    model=self.model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    response_format=response_format,
+                    extra_params=extra_params,
+                )
+            except Exception as error:
+                last_error = error
+                if not _is_retryable_error(error) or attempt == max_retries - 1:
+                    raise
+                wait = _get_retry_wait(
+                    error,
+                    attempt,
+                    min_wait=min_retry_wait,
+                    max_wait=max_retry_wait,
+                )
+                logger.warning(
+                    f"LLM request failed with transient error ({type(error).__name__}), "
+                    f"retrying in {wait:.2f}s (attempt {attempt + 1}/{max_retries}): {error}"
+                )
+                time.sleep(wait)
+
+        if last_error:
+            raise last_error
 
     def chat(
         self,
