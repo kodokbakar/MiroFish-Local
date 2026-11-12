@@ -6,9 +6,11 @@ Includes: CRUD, NER/RE-based text ingestion, hybrid search, retry logic.
 """
 
 import json
+import logging
+import random
+import threading
 import time
 import uuid
-import logging
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, Callable
@@ -70,9 +72,20 @@ class Neo4jStorage(GraphStorage):
         self._embedding = embedding_service or EmbeddingService()
         self._ner = ner_extractor or NERExtractor()
         self._search = SearchService(self._embedding)
+        self._write_locks: Dict[str, threading.Lock] = defaultdict(threading.Lock)
+        self._write_locks_guard = threading.Lock()
 
         # Initialize schema (indexes, constraints)
         self._ensure_schema()
+
+    def _get_write_lock(self, graph_id: str) -> threading.Lock:
+        """Get or create a mutex for serialized writes on a specific graph."""
+        if not hasattr(self, "_write_locks_guard"):
+            self._write_locks_guard = threading.Lock()
+        if not hasattr(self, "_write_locks"):
+            self._write_locks = defaultdict(threading.Lock)
+        with self._write_locks_guard:
+            return self._write_locks[graph_id]
 
     def close(self):
         """Close the Neo4j driver connection."""
@@ -146,10 +159,11 @@ class Neo4jStorage(GraphStorage):
                 return func(*args, **kwargs)
             except (TransientError, ServiceUnavailable, SessionExpired) as e:
                 last_error = e
-                wait = self.RETRY_DELAY_BASE * (2 ** attempt)
+                jitter = random.uniform(0.0, 0.5)
+                wait = self.RETRY_DELAY_BASE * (2 ** attempt) + jitter
                 logger.warning(
                     f"Neo4j transient error (attempt {attempt + 1}/{self.MAX_RETRIES}), "
-                    f"retrying in {wait}s: {e}"
+                    f"retrying in {wait:.2f}s: {e}"
                 )
                 time.sleep(wait)
             except Exception:
@@ -339,7 +353,7 @@ class Neo4jStorage(GraphStorage):
                 except Exception as e:
                     logger.warning(f"Failed to add label '{etype}' to '{item['name']}': {e}")
 
-        with self._driver.session() as session:
+        with self._get_write_lock(graph_id), self._driver.session() as session:
             def _persist_chunk(tx):
                 # 1. Create episode node
                 tx.run(
@@ -400,6 +414,8 @@ class Neo4jStorage(GraphStorage):
                         }
                         for item in merged_entities_by_name.values()
                     ]
+                    # Sort deterministically by name_lower to prevent circular wait deadlocks
+                    entities_data.sort(key=lambda x: x["name_lower"])
 
                     res = tx.run(
                         """
@@ -431,8 +447,9 @@ class Neo4jStorage(GraphStorage):
                             except Exception:
                                 pass
 
-                # 3. Batch set labels grouped by entity type
-                for etype, name_list in type_to_names.items():
+                # 3. Batch set labels grouped by entity type in deterministic order
+                for etype in sorted(type_to_names.keys()):
+                    name_list = sorted(type_to_names[etype])
                     tx.run(
                         f"MATCH (n:Entity {{graph_id: $gid}}) WHERE n.name_lower IN $names SET n:`{etype}`",
                         gid=graph_id,
@@ -508,6 +525,10 @@ class Neo4jStorage(GraphStorage):
 
                     prepared_relations = list(deduped_relations.values())
                     if prepared_relations:
+                        # Sort deterministically by (source_uuid, target_uuid, name) to prevent deadlocks
+                        prepared_relations.sort(
+                            key=lambda x: (x["source_uuid"], x["target_uuid"], x["name"])
+                        )
                         tx.run(
                             """
                             UNWIND $relations AS rel_data
