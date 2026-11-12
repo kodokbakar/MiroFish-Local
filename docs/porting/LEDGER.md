@@ -69,7 +69,7 @@ Only the orchestrator edits this file.
 | 050 | - | Issue #59: parallelize NER extraction with bounded concurrency | perf | adapt | high | ported | PR #61 (`port/050`, merged) | Bounded NER workers (default 1), ordered serial persistence, bounded retries, and synthetic benchmark; reviewer APPROVE, tester PASS, 805 backend tests pass. |
 | 051 | - | Issue #63: prevent vector search zero-recall under multi-project graphs | bugfix | adapt | medium | in-progress | `port/051` | Candidate oversampling and fallback for Neo4j global vector index across multiple graphs. |
 | 052 | - | Issue #64: add exponential backoff and jitter for HTTP 429 rate limits | bugfix | direct | low | pending | `port/052` | Exponential backoff and full jitter for transient 429/connection errors in LLMClient. |
-| 053 | - | Issue #65: prevent Neo4j transaction deadlocks on hot entity nodes | bugfix | adapt | medium | pending | `port/053` | Deterministic entity/relation lock sorting and per-graph write synchronization in Neo4jStorage. |
+| 053 | - | Issue #65: prevent Neo4j transaction deadlocks on hot entity nodes | bugfix | adapt | medium | ported | `port/053` | Deterministic entity/relation lock sorting and per-graph write mutex in Neo4jStorage; reviewer APPROVE, tester PASS, 847 tests pass. |
 
 ## Skipped (with reason)
 | Upstream commit | Reason |
