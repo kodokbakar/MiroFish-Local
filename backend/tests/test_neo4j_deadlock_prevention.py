@@ -81,3 +81,67 @@ def test_persist_extraction_sorts_relations_deterministically():
     unwind_rels = unwind_rel_calls[0]["relations"]
     keys = [(r["source_uuid"], r["target_uuid"], r["name"]) for r in unwind_rels]
     assert keys == sorted(keys)
+
+
+def test_concurrent_persist_extraction_serializes_per_graph():
+    """
+    Verify that concurrent persist_extraction calls on the same graph_id
+    use the per-graph write lock and serialize writes.
+    """
+    import threading
+    driver = InMemoryNeo4jDriver()
+    storage = _make_storage(driver)
+
+    active_writers = 0
+    max_active_writers = 0
+    writer_lock = threading.Lock()
+
+    orig_execute_write = driver.session().execute_write
+
+    class HookedSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+        def execute_write(self, fn, *args, **kwargs):
+            nonlocal active_writers, max_active_writers
+            with writer_lock:
+                active_writers += 1
+                if active_writers > max_active_writers:
+                    max_active_writers = active_writers
+            try:
+                import time
+                time.sleep(0.01)
+                return fn(driver.FakeTx(driver), *args, **kwargs)
+            finally:
+                with writer_lock:
+                    active_writers -= 1
+
+    driver.session = lambda: HookedSession()
+
+    threads = []
+    errors = []
+
+    def worker(idx):
+        try:
+            storage.persist_extraction(
+                "shared_graph",
+                f"Chunk {idx}",
+                {"entities": [{"name": f"Entity_{idx}", "type": "Test"}], "relations": []},
+            )
+        except Exception as e:
+            errors.append(e)
+
+    for i in range(5):
+        t = threading.Thread(target=worker, args=(i,))
+        threads.append(t)
+        t.start()
+
+    for t in threads:
+        t.join()
+
+    assert not errors
+    # Per-graph write lock ensures only 1 write transaction executes at any given time
+    assert max_active_writers == 1
