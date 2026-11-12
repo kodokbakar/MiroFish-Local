@@ -70,7 +70,7 @@ _node_result = _unpack_node
 
 # Cypher for vector search on edges (facts)
 _VECTOR_SEARCH_EDGES = """
-CALL db.index.vector.queryRelationships('fact_embedding', $limit, $query_vector)
+CALL db.index.vector.queryRelationships('fact_embedding', $candidate_limit, $query_vector)
 YIELD relationship, score
 WHERE relationship.graph_id = $graph_id
 WITH relationship AS r, score
@@ -84,7 +84,7 @@ LIMIT $limit
 
 # Cypher for vector search on nodes (entities)
 _VECTOR_SEARCH_NODES = """
-CALL db.index.vector.queryNodes('entity_embedding', $limit, $query_vector)
+CALL db.index.vector.queryNodes('entity_embedding', $candidate_limit, $query_vector)
 YIELD node, score
 WHERE node.graph_id = $graph_id
 WITH node AS n, score
@@ -167,9 +167,10 @@ class SearchService:
             vector_results = []
         else:
             query_vector = self.embedding.embed(query)
-            # Vector search
+            # Vector search with candidate oversampling to prevent cross-graph starvation
+            candidate_limit = max(limit * 10, 100)
             vector_results = self._run_edge_vector_search(
-                session, graph_id, query_vector, limit * 2
+                session, graph_id, query_vector, limit=limit, candidate_limit=candidate_limit
             )
 
         # Keyword search
@@ -200,8 +201,9 @@ class SearchService:
             vector_results = []
         else:
             query_vector = self.embedding.embed(query)
+            candidate_limit = max(limit * 10, 100)
             vector_results = self._run_node_vector_search(
-                session, graph_id, query_vector, limit * 2
+                session, graph_id, query_vector, limit=limit, candidate_limit=candidate_limit
             )
 
         keyword_results = self._run_node_keyword_search(
@@ -214,15 +216,23 @@ class SearchService:
         return merged
 
     def _run_edge_vector_search(
-        self, session: Neo4jSession, graph_id: str, query_vector: List[float], limit: int
+        self,
+        session: Neo4jSession,
+        graph_id: str,
+        query_vector: List[float],
+        limit: int,
+        candidate_limit: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """Run vector similarity search on edge fact_embedding."""
+        if candidate_limit is None:
+            candidate_limit = max(limit * 10, 100)
         try:
             result = session.run(
                 _VECTOR_SEARCH_EDGES,
                 graph_id=graph_id,
                 query_vector=query_vector,
                 limit=limit,
+                candidate_limit=candidate_limit,
             )
             return [
                 _unpack_relationship(record)
@@ -261,15 +271,23 @@ class SearchService:
             return []
 
     def _run_node_vector_search(
-        self, session: Neo4jSession, graph_id: str, query_vector: List[float], limit: int
+        self,
+        session: Neo4jSession,
+        graph_id: str,
+        query_vector: List[float],
+        limit: int,
+        candidate_limit: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """Run vector similarity search on entity embedding."""
+        if candidate_limit is None:
+            candidate_limit = max(limit * 10, 100)
         try:
             result = session.run(
                 _VECTOR_SEARCH_NODES,
                 graph_id=graph_id,
                 query_vector=query_vector,
                 limit=limit,
+                candidate_limit=candidate_limit,
             )
             return [
                 _unpack_node(record)

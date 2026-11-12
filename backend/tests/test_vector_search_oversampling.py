@@ -59,3 +59,39 @@ def test_vector_search_oversamples_candidates_to_prevent_zero_recall():
     assert len(nodes) == 5
     assert nodes[0]["uuid"] == "target_0"
     assert nodes[0]["graph_id"] == "g_target"
+
+
+def test_vector_edge_search_oversamples_candidates_to_prevent_zero_recall():
+    """Verify edge vector search also oversamples candidate limit."""
+    embedding = Mock()
+    embedding.embed.return_value = [0.1, 0.2, 0.3]
+    session = Mock()
+
+    def mock_run(query, **params):
+        if "queryRelationships" in query and "vector" in query:
+            assert params.get("candidate_limit", 0) >= 100
+            target_gid = params.get("graph_id")
+            results = []
+            for i in range(20):
+                results.append({
+                    "r": {"uuid": f"rel_other_{i}", "name": "REL", "fact": "Other fact", "graph_id": "g_other"},
+                    "src_uuid": "s_other", "tgt_uuid": "t_other", "score": 0.9,
+                })
+            for i in range(3):
+                results.append({
+                    "r": {"uuid": f"rel_target_{i}", "name": "REL", "fact": "Target fact", "graph_id": target_gid},
+                    "src_uuid": "s_target", "tgt_uuid": "t_target", "score": 0.8,
+                })
+            return [
+                r for r in results
+                if r["r"]["graph_id"] == target_gid
+            ][:params.get("limit", 10)]
+        return []
+
+    session.run.side_effect = mock_run
+    service = SearchService(embedding)
+
+    edges = service.search_edges(session, "g_target", "Find target facts", limit=10)
+    assert len(edges) == 3
+    assert edges[0]["uuid"] == "rel_target_0"
+    assert edges[0]["graph_id"] == "g_target"
