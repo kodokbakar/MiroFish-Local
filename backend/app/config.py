@@ -4,6 +4,7 @@ Loads configuration from .env file in project root directory
 """
 
 import os
+from typing import Optional
 from dotenv import load_dotenv
 
 # Load .env file from project root
@@ -31,7 +32,34 @@ class Config:
     LLM_API_KEY = os.environ.get('LLM_API_KEY')
     LLM_BASE_URL = os.environ.get('LLM_BASE_URL', 'http://localhost:11434/v1')
     LLM_MODEL_NAME = os.environ.get('LLM_MODEL_NAME', 'qwen2.5:32b')
+    LLM_MODEL_NER = os.environ.get('LLM_MODEL_NER')
+    LLM_MODEL_REPORT = os.environ.get('LLM_MODEL_REPORT')
+    LLM_MODEL_SIMULATION = os.environ.get('LLM_MODEL_SIMULATION')
     NER_EXTRACTION_WORKERS = int(os.environ.get('NER_EXTRACTION_WORKERS', '1'))
+
+    @classmethod
+    def get_stage_model(cls, stage: str) -> str:
+        """
+        Return the configured model for a specific pipeline stage,
+        falling back dynamically to LLM_MODEL_NAME if unset.
+        """
+        stage_key = f"LLM_MODEL_{stage.upper()}"
+        return (
+            os.environ.get(stage_key)
+            or getattr(cls, stage_key, None)
+            or os.environ.get('LLM_MODEL_NAME')
+            or cls.LLM_MODEL_NAME
+        )
+
+    @classmethod
+    def get_llm_api_key(cls) -> Optional[str]:
+        """Return the current LLM API key dynamically from environment or class attribute."""
+        return os.environ.get('LLM_API_KEY') or cls.LLM_API_KEY
+
+    @classmethod
+    def get_llm_base_url(cls) -> str:
+        """Return the current LLM base URL dynamically from environment or class attribute."""
+        return os.environ.get('LLM_BASE_URL') or cls.LLM_BASE_URL
 
     # Neo4j configuration
     NEO4J_URI = os.environ.get('NEO4J_URI', 'bolt://localhost:7687')
