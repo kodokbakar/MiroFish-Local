@@ -1,6 +1,6 @@
 {
   "name": "mirofish-local",
-  "version": "0.2.0",
+  "version": "0.4.0",
   "description": "MiroFish-Local — local-first swarm intelligence engine (Neo4j + Ollama)",
   "scripts": {
     "setup": "npm install && cd frontend && npm install",
