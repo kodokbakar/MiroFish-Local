@@ -57,11 +57,11 @@ Forked from [nikmcfly/MiroFish-Offline](https://github.com/nikmcfly/MiroFish-Off
 ## Upcoming Milestones
 
 ### v0.5.0 — Multi-Model & Task Routing
-- [ ] **Task-based Model Router**: Assign dedicated models per pipeline stage (fast/cheap 7B-8B model for NER/RE, high-reasoning 32B+ model for ReAct Report Agent).
+- [ ] **Task-based Model Router**: Assign dedicated models per pipeline stage (fast/cheap 7B-8B model for NER/RE, high-reasoning 32B+ model for ReAct Report Agent) (#69)
 - [x] Support vLLM and llama.cpp as alternative backends alongside Ollama (via unified OpenAI-compatible `/v1` endpoint).
 - [x] Model benchmarking and concurrency measurement script.
-- [ ] Telemetry & health endpoint `/api/status` (Neo4j connection, LLM endpoint availability, disk storage).
-- [ ] Bypass LLM NER for structured social actions (Fast-Path Ingestion via Cypher UNWIND MERGE).
+- [ ] Telemetry & health endpoint `/api/status` (Neo4j connection, LLM endpoint availability, disk storage) (#70)
+- [ ] Bypass LLM NER for structured social actions (Fast-Path Ingestion via Cypher UNWIND MERGE) (#71)
 
 ### v0.6.0 — Enhanced Simulation & Real-time Streaming
 - [ ] Real-time simulation stream via SSE/WebSocket to eliminate polling `setInterval` timers in frontend.
