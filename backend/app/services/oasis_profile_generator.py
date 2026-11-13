@@ -74,6 +74,71 @@ def _coerce_to_str_list(value: Any) -> List[str]:
 
 
 @dataclass
+class AgentArchetype:
+    """Agent archetype specification guiding persona and social behavior."""
+    key: str
+    name: str
+    description: str
+    traits: List[str] = field(default_factory=list)
+    posting_tone: str = "balanced"
+    activity_preferences: Dict[str, float] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "key": self.key,
+            "name": self.name,
+            "description": self.description,
+            "traits": self.traits,
+            "posting_tone": self.posting_tone,
+            "activity_preferences": self.activity_preferences,
+        }
+
+
+DEFAULT_ARCHETYPES: Dict[str, AgentArchetype] = {
+    "critic": AgentArchetype(
+        key="critic",
+        name="Critic",
+        description="Scrutinizes claims critically, challenges consensus, and highlights potential risks or contradictions.",
+        traits=["skeptical", "inquisitive", "direct", "demanding"],
+        posting_tone="challenging and rigorous",
+        activity_preferences={"DISLIKE_POST": 0.4, "CREATE_COMMENT": 0.4, "CREATE_POST": 0.2},
+    ),
+    "supporter": AgentArchetype(
+        key="supporter",
+        name="Supporter",
+        description="Enthusiastically advocates for positive developments, amplifies good news, and offers constructive encouragement.",
+        traits=["optimistic", "collaborative", "encouraging", "loyal"],
+        posting_tone="enthusiastic and welcoming",
+        activity_preferences={"LIKE_POST": 0.5, "REPOST": 0.3, "CREATE_POST": 0.2},
+    ),
+    "analyst": AgentArchetype(
+        key="analyst",
+        name="Analyst",
+        description="Focuses on verifiable facts, objective data, technical nuance, and unbiased structural observations.",
+        traits=["empirical", "objective", "methodical", "composed"],
+        posting_tone="measured and informative",
+        activity_preferences={"CREATE_POST": 0.4, "CREATE_COMMENT": 0.4, "LIKE_POST": 0.2},
+    ),
+    "influencer": AgentArchetype(
+        key="influencer",
+        name="Influencer",
+        description="High social activity agent focused on community engagement, trend curation, and opinion leadership.",
+        traits=["charismatic", "expressive", "social", "trendsetter"],
+        posting_tone="engaging, punchy, and emotive",
+        activity_preferences={"CREATE_POST": 0.4, "REPOST": 0.3, "LIKE_POST": 0.3},
+    ),
+    "lurker": AgentArchetype(
+        key="lurker",
+        name="Lurker",
+        description="Quiet observer who consumes social discussions frequently but posts or comments infrequently.",
+        traits=["observant", "reticent", "selective", "quiet"],
+        posting_tone="minimal and succinct",
+        activity_preferences={"LIKE_POST": 0.8, "CREATE_POST": 0.1, "CREATE_COMMENT": 0.1},
+    ),
+}
+
+
+@dataclass
 class OasisAgentProfile:
     """OASIS Agent Profile data structure"""
     # Common fields
@@ -82,6 +147,9 @@ class OasisAgentProfile:
     name: str
     bio: str
     persona: str
+
+    # Optional archetype
+    archetype: Optional[str] = None
 
     # Optional fields - Reddit style
     karma: int = 1000
@@ -183,6 +251,7 @@ class OasisAgentProfile:
             "name": self.name,
             "bio": self.bio,
             "persona": self.persona,
+            "archetype": self.archetype,
             "karma": self.karma,
             "friend_count": self.friend_count,
             "follower_count": self.follower_count,
@@ -243,11 +312,13 @@ class OasisProfileGenerator:
         base_url: Optional[str] = None,
         model_name: Optional[str] = None,
         storage: Optional[GraphStorage] = None,
-        graph_id: Optional[str] = None
+        graph_id: Optional[str] = None,
+        archetypes: Optional[List[AgentArchetype]] = None,
     ):
         self.api_key = api_key or Config.get_llm_api_key()
         self.base_url = base_url or Config.get_llm_base_url()
         self.model_name = model_name or Config.get_stage_model("simulation")
+        self.archetypes = archetypes or []
 
         if not self.api_key:
             raise ValueError("LLM_API_KEY not configured")
@@ -265,7 +336,8 @@ class OasisProfileGenerator:
         self,
         entity: EntityNode,
         user_id: int,
-        use_llm: bool = True
+        use_llm: bool = True,
+        archetype: Optional[AgentArchetype] = None,
     ) -> OasisAgentProfile:
         """
         Generate OASIS Agent Profile from knowledge graph entity
@@ -294,7 +366,8 @@ class OasisProfileGenerator:
                 entity_type=entity_type,
                 entity_summary=entity.summary,
                 entity_attributes=entity.attributes,
-                context=context
+                context=context,
+                archetype=archetype,
             )
         else:
             # Use rules to generate basic persona
@@ -302,15 +375,21 @@ class OasisProfileGenerator:
                 entity_name=name,
                 entity_type=entity_type,
                 entity_summary=entity.summary,
-                entity_attributes=entity.attributes
+                entity_attributes=entity.attributes,
+                archetype=archetype,
             )
-        
+
+        persona_text = profile_data.get("persona", entity.summary or f"A {entity_type} named {name}.")
+        if archetype and archetype.name not in persona_text:
+            persona_text = f"{persona_text} Behavioral archetype: {archetype.name} ({', '.join(archetype.traits)})."
+
         return OasisAgentProfile(
             user_id=user_id,
             user_name=user_name,
             name=name,
             bio=profile_data.get("bio", f"{entity_type}: {name}"),
-            persona=profile_data.get("persona", entity.summary or f"A {entity_type} named {name}."),
+            persona=persona_text,
+            archetype=archetype.name if archetype else None,
             karma=profile_data.get("karma", random.randint(500, 5000)),
             friend_count=profile_data.get("friend_count", random.randint(50, 500)),
             follower_count=profile_data.get("follower_count", random.randint(100, 1000)),
@@ -506,25 +585,21 @@ class OasisProfileGenerator:
         entity_type: str,
         entity_summary: str,
         entity_attributes: Dict[str, Any],
-        context: str
+        context: str,
+        archetype: Optional[AgentArchetype] = None,
     ) -> Dict[str, Any]:
         """
         Use LLM to generate very detailed persona
-
-        Based on entity type:
-        - Individual entities: generate specific character profiles
-        - Group/institutional entities: generate representative account profiles
         """
-
         is_individual = self._is_individual_entity(entity_type)
 
         if is_individual:
             prompt = self._build_individual_persona_prompt(
-                entity_name, entity_type, entity_summary, entity_attributes, context
+                entity_name, entity_type, entity_summary, entity_attributes, context, archetype=archetype
             )
         else:
             prompt = self._build_group_persona_prompt(
-                entity_name, entity_type, entity_summary, entity_attributes, context
+                entity_name, entity_type, entity_summary, entity_attributes, context, archetype=archetype
             )
 
         # Try multiple times until successful or max retry attempts reached
@@ -688,15 +763,26 @@ class OasisProfileGenerator:
         entity_type: str,
         entity_summary: str,
         entity_attributes: Dict[str, Any],
-        context: str
+        context: str,
+        archetype: Optional[AgentArchetype] = None,
     ) -> str:
         """Build detailed persona prompt for individual entities"""
 
         attrs_str = json.dumps(entity_attributes, ensure_ascii=False) if entity_attributes else "None"
         context_str = context[:3000] if context else "No additional context"
+        archetype_instructions = ""
+        if archetype:
+            archetype_instructions = f"""
+Behavioral Archetype Guidance:
+- Archetype Name: {archetype.name}
+- Personality Traits: {', '.join(archetype.traits)}
+- Posting Tone: {archetype.posting_tone}
+- Behavioral Description: {archetype.description}
+Ensure the persona and speech style strongly embody this archetype.
+"""
 
         return f"""Generate a detailed social media user persona for the entity, maximizing restoration of existing reality.
-
+{archetype_instructions}
 Entity Name: {entity_name}
 Entity Type: {entity_type}
 Entity Summary: {entity_summary}
@@ -737,15 +823,25 @@ Important:
         entity_type: str,
         entity_summary: str,
         entity_attributes: Dict[str, Any],
-        context: str
+        context: str,
+        archetype: Optional[AgentArchetype] = None,
     ) -> str:
         """Build detailed persona prompt for group/institutional entities"""
 
         attrs_str = json.dumps(entity_attributes, ensure_ascii=False) if entity_attributes else "None"
         context_str = context[:3000] if context else "No additional context"
+        archetype_instructions = ""
+        if archetype:
+            archetype_instructions = f"""
+Institutional Archetype Guidance:
+- Archetype Name: {archetype.name}
+- Tone: {archetype.posting_tone}
+- Traits: {', '.join(archetype.traits)}
+- Description: {archetype.description}
+"""
 
         return f"""Generate detailed social media account profile for institutional/group entity, maximizing restoration of existing reality.
-
+{archetype_instructions}
 Entity Name: {entity_name}
 Entity Type: {entity_type}
 Entity Summary: {entity_summary}
@@ -784,7 +880,8 @@ Important:
         entity_name: str,
         entity_type: str,
         entity_summary: str,
-        entity_attributes: Dict[str, Any]
+        entity_attributes: Dict[str, Any],
+        archetype: Optional[AgentArchetype] = None,
     ) -> Dict[str, Any]:
         """Generate basic persona using rules"""
 
@@ -864,7 +961,8 @@ Important:
         graph_id: Optional[str] = None,
         parallel_count: int = 5,
         realtime_output_path: Optional[str] = None,
-        output_platform: str = "reddit"
+        output_platform: str = "reddit",
+        archetype_ratios: Optional[Dict[str, float]] = None,
     ) -> List[OasisAgentProfile]:
         """
         Generate Agent Profiles in batch from entities (supports parallel generation)
@@ -877,10 +975,34 @@ Important:
             parallel_count: Number of parallel generations, default 5
             realtime_output_path: Real-time output file path (if provided, write after each generation)
             output_platform: Output platform format ("reddit" or "twitter")
+            archetype_ratios: Optional dict mapping archetype key -> ratio (e.g. {'critic': 0.5, 'supporter': 0.5})
 
         Returns:
             List of Agent Profiles
         """
+        return self.generate_profile_batch(
+            entities=entities,
+            use_llm=use_llm,
+            progress_callback=progress_callback,
+            graph_id=graph_id,
+            parallel_count=parallel_count,
+            realtime_output_path=realtime_output_path,
+            output_platform=output_platform,
+            archetype_ratios=archetype_ratios,
+        )
+
+    def generate_profile_batch(
+        self,
+        entities: List[EntityNode],
+        use_llm: bool = True,
+        progress_callback: Optional[callable] = None,
+        graph_id: Optional[str] = None,
+        parallel_count: int = 5,
+        realtime_output_path: Optional[str] = None,
+        output_platform: str = "reddit",
+        archetype_ratios: Optional[Dict[str, float]] = None,
+    ) -> List[OasisAgentProfile]:
+        """Alias for generate_profiles_from_entities with optional archetype distribution."""
         import concurrent.futures
         from threading import Lock
         
@@ -894,6 +1016,30 @@ Important:
         lock = Lock()
         last_save_time = [0.0]
         last_save_count = [0]
+
+        # Resolve archetypes distribution
+        assigned_archetypes: List[Optional[AgentArchetype]] = [None] * total
+        archetypes_list = getattr(self, "archetypes", []) or []
+        if archetype_ratios:
+            # Normalize ratios
+            total_ratio = sum(archetype_ratios.values()) or 1.0
+            archetype_pool = []
+            for k, ratio in archetype_ratios.items():
+                arc = DEFAULT_ARCHETYPES.get(k.lower())
+                if not arc:
+                    # Check custom archetypes
+                    arc = next((a for a in archetypes_list if a.key.lower() == k.lower()), None)
+                if arc:
+                    count = max(1, int(round((ratio / total_ratio) * total)))
+                    archetype_pool.extend([arc] * count)
+            # Fill or trim pool to match total
+            while len(archetype_pool) < total and archetype_pool:
+                archetype_pool.append(archetype_pool[len(archetype_pool) % len(archetype_pool)])
+            for i in range(min(total, len(archetype_pool))):
+                assigned_archetypes[i] = archetype_pool[i]
+        elif archetypes_list:
+            for i in range(total):
+                assigned_archetypes[i] = archetypes_list[i % len(archetypes_list)]
 
         # Helper function for real-time file writing
         def save_profiles_realtime(force: bool = False):
@@ -923,13 +1069,25 @@ Important:
         def generate_single_profile(idx: int, entity: EntityNode) -> tuple:
             """Worker function to generate single profile"""
             entity_type = entity.get_entity_type() or "Entity"
+            target_archetype = assigned_archetypes[idx]
 
             try:
-                profile = self.generate_profile_from_entity(
-                    entity=entity,
-                    user_id=idx,
-                    use_llm=use_llm
-                )
+                try:
+                    profile = self.generate_profile_from_entity(
+                        entity=entity,
+                        user_id=idx,
+                        use_llm=use_llm,
+                        archetype=target_archetype,
+                    )
+                except TypeError:
+                    # In case of custom monkeypatched generate_profile_from_entity taking 3 args
+                    profile = self.generate_profile_from_entity(
+                        entity,
+                        idx,
+                        use_llm,
+                    )
+                    if target_archetype and not getattr(profile, "archetype", None):
+                        profile.archetype = target_archetype.name
 
                 # Real-time output generated persona to console and log
                 self._print_generated_profile(entity.name, entity_type, profile)
@@ -946,6 +1104,7 @@ Important:
                     name=entity_name,
                     bio=f"{entity_type}: {entity_name}",
                     persona=entity.summary or f"A participant in social discussions.",
+                    archetype=target_archetype.name if target_archetype else None,
                     source_entity_uuid=entity.uuid,
                     source_entity_type=entity_type,
                 )

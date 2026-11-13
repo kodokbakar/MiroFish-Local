@@ -34,7 +34,7 @@ def test_profile_generator_assigns_and_injects_archetype():
         activity_preferences={"LIKE_POST": 0.2, "CREATE_POST": 0.8},
     )
 
-    generator = OasisProfileGenerator(archetypes=[custom_archetype])
+    generator = OasisProfileGenerator(api_key="test-key", archetypes=[custom_archetype])
 
     entity = EntityNode(
         uuid="e1",
@@ -58,10 +58,10 @@ def test_profile_generator_assigns_and_injects_archetype():
 
 def test_batch_generation_distributes_archetypes_by_ratio():
     """Batch profile generation distributes assigned archetypes across entities."""
-    generator = OasisProfileGenerator()
+    generator = OasisProfileGenerator(api_key="test-key")
 
     entities = [
-        EntityNode(uuid=f"e{i}", name=f"Agent_{i}", labels=["Entity", "Person"], summary=f"User {i}")
+        EntityNode(uuid=f"e{i}", name=f"Agent_{i}", labels=["Entity", "Person"], summary=f"User {i}", attributes={})
         for i in range(10)
     ]
 
