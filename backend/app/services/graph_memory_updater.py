@@ -310,23 +310,25 @@ class GraphMemoryUpdater:
 
     def _send_batch_activities(self, activities: List[AgentActivity], platform: str):
         """
-        Send batched activities to the graph by merging them as text and using add_text to trigger NER.
+        Send batched activities to the graph using fast-path structured ingestion,
+        falling back to text add_text() if fast-path is unsupported by the storage backend.
         """
         if not activities:
             return
 
-        episode_texts = [activity.to_episode_text() for activity in activities]
-        combined_text = "\n".join(episode_texts)
-
         for attempt in range(self.MAX_RETRIES):
             try:
-                self.storage.add_text(self.graph_id, combined_text)
+                if hasattr(self.storage, "persist_structured_activities"):
+                    self.storage.persist_structured_activities(self.graph_id, activities)
+                else:
+                    episode_texts = [activity.to_episode_text() for activity in activities]
+                    combined_text = "\n".join(episode_texts)
+                    self.storage.add_text(self.graph_id, combined_text)
 
                 self._total_sent += 1
                 self._total_items_sent += len(activities)
                 display_name = self._get_platform_display_name(platform)
                 logger.info(f"Successfully batch sent {len(activities)} {display_name} activities to graph {self.graph_id}")
-                logger.debug(f"Batch preview: {combined_text[:200]}...")
                 return
 
             except Exception as e:
