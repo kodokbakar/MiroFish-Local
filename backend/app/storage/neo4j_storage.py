@@ -91,6 +91,41 @@ class Neo4jStorage(GraphStorage):
         """Close the Neo4j driver connection."""
         self._driver.close()
 
+    def check_health(self) -> Dict[str, Any]:
+        """
+        Check Neo4j connectivity and index status for telemetry.
+        Returns a structured dictionary with status ('ok', 'degraded', 'unavailable').
+        """
+        start = time.perf_counter()
+        try:
+            with self._driver.session() as session:
+                res = session.run("SHOW INDEXES YIELD name, state, populationPercent")
+                records = list(res)
+                online_count = sum(1 for r in records if r.get("state") == "ONLINE")
+                populating_count = sum(1 for r in records if r.get("state") == "POPULATING")
+                failed_count = sum(1 for r in records if r.get("state") == "FAILED")
+                latency_ms = round((time.perf_counter() - start) * 1000, 2)
+
+                status = "ok"
+                if failed_count > 0 or populating_count > 0:
+                    status = "degraded"
+
+                return {
+                    "status": status,
+                    "latency_ms": latency_ms,
+                    "indexes": {
+                        "online": online_count,
+                        "populating": populating_count,
+                        "failed": failed_count,
+                    },
+                }
+        except Exception as e:
+            return {
+                "status": "unavailable",
+                "error": str(e),
+                "latency_ms": round((time.perf_counter() - start) * 1000, 2),
+            }
+
     def _ensure_schema(self):
         """Create indexes and constraints if they don't exist and wait for online status."""
         with self._driver.session() as session:
