@@ -1,12 +1,18 @@
 # MiroFish-Local Roadmap
 
-## Current State (v0.4.0)
+## Current State (v0.5.0)
 
 **MiroFish-Local** is a local-first, vendor-independent multi-agent simulation and GraphRAG engine.
 Forked from [nikmcfly/MiroFish-Offline](https://github.com/nikmcfly/MiroFish-Offline) (which originated from [666ghj/MiroFish](https://github.com/666ghj/MiroFish)), this repository completely removes external cloud dependencies (Zep Cloud, DashScope) in favor of a local Neo4j 5.15+ Community Edition database behind an abstract `GraphStorage` layer and flexible OpenAI-compatible LLM endpoints (Ollama, vLLM, llama.cpp, Claude, OpenAI).
 
-### v0.4.0 Key Capabilities
+### v0.5.0 Key Capabilities
 - **Engine**: 100% offline-capable, runs on Python 3.12+ with Flask and Neo4j CE.
+- **Staged Multi-Model Routing**:
+  - Task-based model router assigning dedicated models per pipeline stage (`LLM_MODEL_NER`, `LLM_MODEL_REPORT`, `LLM_MODEL_SIMULATION`) with automatic fallback to `LLM_MODEL_NAME`.
+- **Infrastructure Telemetry**:
+  - `GET /api/status` endpoint diagnosing Neo4j connectivity, index population states, LLM reachability, and disk capacity without credential exposure.
+- **Fast-Path Graph Ingestion**:
+  - Direct Cypher batch ingestion for structured OASIS agent activities (`LIKE_POST`, `POSTED`, `FOLLOWS`, etc.) via `UNWIND`, bypassing LLM NER and dropping memory update latency to milliseconds.
 - **Resilience & Concurrency**:
   - Auto-reconnect & retry logic with exponential backoff and randomized jitter on Neo4j transient errors (`TransientError`, `ServiceUnavailable`, `SessionExpired`).
   - Deterministic entity (`name_lower`) and relation lock ordering plus per-graph write mutex to prevent Neo4j transaction deadlocks.
@@ -19,7 +25,7 @@ Forked from [nikmcfly/MiroFish-Offline](https://github.com/nikmcfly/MiroFish-Off
   - Table-aware parsing and chunking for CSV and JSON datasets.
   - Local atomic caching for successful NER extraction to avoid redundant LLM calls across builds.
   - Parallel bounded NER extraction (1–4 worker threads) with ordered serial persistence.
-- **Quality & Verification**: 853 automated tests passing offline across backend storage, ingestion, simulation, and report generation.
+- **Quality & Verification**: 863 automated tests passing offline across backend storage, ingestion, simulation, and report generation.
 
 ---
 
@@ -52,16 +58,16 @@ Forked from [nikmcfly/MiroFish-Offline](https://github.com/nikmcfly/MiroFish-Off
 - [x] Concurrency and throughput benchmark suite (`backend/scripts/benchmark_ner_concurrency.py`).
 - [x] Comprehensive test suite exceeding 850+ offline passing tests.
 
+### v0.5.0 — Multi-Model & Task Routing
+- [x] **Task-based Model Router**: Assign dedicated models per pipeline stage (fast/cheap 7B-8B model for NER/RE, high-reasoning 32B+ model for ReAct Report Agent) (#69)
+- [x] Support vLLM and llama.cpp as alternative backends alongside Ollama (via unified OpenAI-compatible `/v1` endpoint).
+- [x] Model benchmarking and concurrency measurement script.
+- [x] Telemetry & health endpoint `/api/status` (Neo4j connection, LLM endpoint availability, disk storage) (#70)
+- [x] Bypass LLM NER for structured social actions (Fast-Path Ingestion via Cypher UNWIND MERGE) (#71)
+
 ---
 
 ## Upcoming Milestones
-
-### v0.5.0 — Multi-Model & Task Routing
-- [ ] **Task-based Model Router**: Assign dedicated models per pipeline stage (fast/cheap 7B-8B model for NER/RE, high-reasoning 32B+ model for ReAct Report Agent) (#69)
-- [x] Support vLLM and llama.cpp as alternative backends alongside Ollama (via unified OpenAI-compatible `/v1` endpoint).
-- [x] Model benchmarking and concurrency measurement script.
-- [ ] Telemetry & health endpoint `/api/status` (Neo4j connection, LLM endpoint availability, disk storage) (#70)
-- [ ] Bypass LLM NER for structured social actions (Fast-Path Ingestion via Cypher UNWIND MERGE) (#71)
 
 ### v0.6.0 — Enhanced Simulation & Real-time Streaming
 - [ ] Real-time simulation stream via SSE/WebSocket to eliminate polling `setInterval` timers in frontend.
