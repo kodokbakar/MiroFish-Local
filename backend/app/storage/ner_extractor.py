@@ -74,7 +74,7 @@ class NERExtractor:
                  cache_dir: Optional[str | Path] = None):
         if max_retries < 0:
             raise ValueError("max_retries must be nonnegative")
-        self.llm = llm_client or LLMClient()
+        self.llm = llm_client or LLMClient(model=Config.get_stage_model("ner"))
         self.max_retries = max_retries
         self.cache = ExtractionCache(cache_dir or Path(Config.UPLOAD_FOLDER) / "ner_cache")
 
