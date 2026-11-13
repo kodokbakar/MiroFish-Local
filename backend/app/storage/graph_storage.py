@@ -43,6 +43,15 @@ class GraphStorage(ABC):
         """Embed and persist one extracted chunk; return its new episode ID."""
 
     @abstractmethod
+    def persist_structured_activities(
+        self, graph_id: str, activities: List[Dict[str, Any]]
+    ) -> str:
+        """
+        Fast-path graph ingestion for pre-structured social agent activities.
+        Bypasses LLM NER extraction and directly merges actor/target entities and relationships.
+        """
+
+    @abstractmethod
     def add_text(
         self,
         graph_id: str,

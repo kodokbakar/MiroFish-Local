@@ -576,6 +576,162 @@ class Neo4jStorage(GraphStorage):
         )
         return episode_id
 
+    def persist_structured_activities(
+        self, graph_id: str, activities: List[Any]
+    ) -> str:
+        """
+        Fast-path graph ingestion for structured social actions.
+        Directly creates actor/target Entity nodes and action RELATION edges via Cypher UNWIND,
+        completely bypassing LLM NER.
+        """
+        if not activities:
+            return ""
+
+        episode_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+
+        # Build structured entities and relations directly
+        entities_dict: Dict[str, Dict[str, Any]] = {}
+        relations_list: List[Dict[str, Any]] = []
+
+        action_rel_map = {
+            "LIKE_POST": "LIKED",
+            "DISLIKE_POST": "DISLIKED",
+            "CREATE_POST": "POSTED",
+            "REPOST": "REPOSTED",
+            "QUOTE_POST": "QUOTED",
+            "FOLLOW": "FOLLOWS",
+            "CREATE_COMMENT": "COMMENTED_ON",
+            "LIKE_COMMENT": "LIKED_COMMENT",
+            "DISLIKE_COMMENT": "DISLIKED_COMMENT",
+            "MUTE": "MUTED",
+        }
+
+        for act in activities:
+            # Handle both dataclass/object and dict
+            agent_name = getattr(act, "agent_name", None) or (act.get("agent_name") if isinstance(act, dict) else "")
+            action_type = getattr(act, "action_type", None) or (act.get("action_type") if isinstance(act, dict) else "")
+            action_args = getattr(act, "action_args", None) or (act.get("action_args") if isinstance(act, dict) else {})
+            if not isinstance(action_args, dict):
+                action_args = {}
+
+            if not agent_name:
+                continue
+
+            actor_lower = agent_name.lower()
+            if actor_lower not in entities_dict:
+                entities_dict[actor_lower] = {
+                    "name": agent_name,
+                    "name_lower": actor_lower,
+                    "type": "Person",
+                    "summary": f"Agent {agent_name}",
+                    "uuid": str(uuid.uuid4()),
+                }
+
+            # Check target entity (e.g. target author, post, or followed user)
+            target_name = (
+                action_args.get("post_author_name")
+                or action_args.get("original_author_name")
+                or action_args.get("target_user")
+            )
+            rel_type = action_rel_map.get(action_type)
+
+            if target_name and rel_type:
+                target_lower = target_name.lower()
+                if target_lower not in entities_dict:
+                    entities_dict[target_lower] = {
+                        "name": target_name,
+                        "name_lower": target_lower,
+                        "type": "Person",
+                        "summary": f"User {target_name}",
+                        "uuid": str(uuid.uuid4()),
+                    }
+
+                fact_text = f"{agent_name} {rel_type.lower()} {target_name}"
+                relations_list.append({
+                    "uuid": str(uuid.uuid4()),
+                    "source_lower": actor_lower,
+                    "target_lower": target_lower,
+                    "name": rel_type,
+                    "fact": fact_text,
+                })
+
+        entities_data = list(entities_dict.values())
+        # Sort deterministically to prevent deadlocks
+        entities_data.sort(key=lambda x: x["name_lower"])
+        relations_list.sort(key=lambda x: (x["source_lower"], x["target_lower"], x["name"]))
+
+        with self._get_write_lock(graph_id), self._driver.session() as session:
+            def _write_activities(tx):
+                # 1. Episode node
+                tx.run(
+                    """
+                    CREATE (ep:Episode {
+                        uuid: $uuid,
+                        graph_id: $graph_id,
+                        data: $data,
+                        processed: true,
+                        created_at: $created_at
+                    })
+                    """,
+                    uuid=episode_id,
+                    graph_id=graph_id,
+                    data=f"Structured batch: {len(activities)} activities",
+                    created_at=now,
+                )
+
+                # 2. Merge entities
+                if entities_data:
+                    tx.run(
+                        """
+                        UNWIND $entities AS e
+                        MERGE (n:Entity {graph_id: $gid, name_lower: e.name_lower})
+                        ON CREATE SET
+                            n.uuid = e.uuid,
+                            n.name = e.name,
+                            n.summary = e.summary,
+                            n.attributes_json = '{}',
+                            n.created_at = $now
+                        SET n:Person
+                        """,
+                        gid=graph_id,
+                        entities=entities_data,
+                        now=now,
+                    )
+
+                # 3. Merge relations
+                if relations_list:
+                    tx.run(
+                        """
+                        UNWIND $relations AS r
+                        MATCH (src:Entity {graph_id: $gid, name_lower: r.source_lower})
+                        MATCH (tgt:Entity {graph_id: $gid, name_lower: r.target_lower})
+                        MERGE (src)-[rel:RELATION {graph_id: $gid, name: r.name}]->(tgt)
+                        ON CREATE SET
+                            rel.uuid = r.uuid,
+                            rel.fact = r.fact,
+                            rel.episode_ids = [$episode_id],
+                            rel.created_at = $now
+                        ON MATCH SET
+                            rel.episode_ids = CASE
+                                WHEN rel.episode_ids IS NULL THEN [$episode_id]
+                                WHEN $episode_id IN rel.episode_ids THEN rel.episode_ids
+                                ELSE rel.episode_ids + [$episode_id]
+                            END
+                        """,
+                        gid=graph_id,
+                        relations=relations_list,
+                        episode_id=episode_id,
+                        now=now,
+                    )
+
+            self._call_with_retry(session.execute_write, _write_activities)
+
+        logger.info(
+            f"[fast_path] Ingested {len(activities)} activities into graph {graph_id} (episode={episode_id})"
+        )
+        return episode_id
+
     def add_text_batch(
         self,
         graph_id: str,
