@@ -74,7 +74,7 @@ Only the orchestrator edits this file.
 | 055 | - | Issue #70: add /api/status infrastructure health check | feature | direct | low | ported | `port/055` | GET /api/status telemetry probing Neo4j, LLM endpoint, and disk limits; reviewer APPROVE, tester PASS, 856 tests pass. |
 | 056 | - | Issue #71: fast-path graph ingestion for structured social actions without LLM NER | feature | adapt | medium | ported | `port/056` | Direct Cypher batch ingestion for structured social actions; reviewer APPROVE, tester PASS, 855 tests pass. |
 | 057 | - | Issue #75: real-time simulation streaming via SSE to replace frontend polling | feature | direct | medium | pending | `port/057` | SSE endpoint /api/simulation/<id>/stream with real-time tail-follower on state/action logs. |
-| 058 | - | Issue #76: process group isolation to guarantee full termination of child OASIS subprocesses | bugfix | direct | low | pending | `port/058` | start_new_session=True and killpg for clean child subprocess group termination on stop and shutdown. |
+| 058 | - | Issue #76: process group isolation to guarantee full termination of child OASIS subprocesses | bugfix | direct | low | ported | `port/058` | Cross-platform process group isolation and killpg escalation; reviewer APPROVE, tester PASS, 866 tests pass. |
 | 059 | - | Issue #77: custom agent archetypes beyond OASIS default personas | feature | direct | low | pending | `port/059` | Archetype schemas and persona prompt injection for diverse simulation agent behaviors. |
 
 ## Skipped (with reason)
