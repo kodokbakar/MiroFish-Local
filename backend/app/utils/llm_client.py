@@ -143,9 +143,9 @@ class LLMClient:
         model: Optional[str] = None,
         timeout: float = 300.0
     ):
-        self.api_key = api_key or Config.LLM_API_KEY
-        self.base_url = base_url or Config.LLM_BASE_URL
-        self.model = model or Config.LLM_MODEL_NAME
+        self.api_key = api_key or Config.get_llm_api_key()
+        self.base_url = base_url or Config.get_llm_base_url()
+        self.model = model or Config.get_stage_model("default")
 
         if not self.api_key:
             raise ValueError("LLM_API_KEY not configured")
