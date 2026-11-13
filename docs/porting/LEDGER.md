@@ -71,7 +71,7 @@ Only the orchestrator edits this file.
 | 052 | - | Issue #64: add exponential backoff and jitter for HTTP 429 rate limits | bugfix | direct | low | ported | `port/052` | Exponential backoff and full jitter with Retry-After for RateLimitError/connection errors; reviewer APPROVE, tester PASS, 848 tests pass. |
 | 053 | - | Issue #65: prevent Neo4j transaction deadlocks on hot entity nodes | bugfix | adapt | medium | ported | `port/053` | Deterministic entity/relation lock sorting and per-graph write mutex in Neo4jStorage; reviewer APPROVE, tester PASS, 847 tests pass. |
 | 054 | - | Issue #69: task-based model router for staged inference | feature | direct | low | ported | `port/054` | Staged model routing via Config.get_stage_model with default fallback; reviewer APPROVE, tester PASS, 858 tests pass. |
-| 055 | - | Issue #70: add /api/status infrastructure health check | feature | direct | low | pending | `port/055` | Infrastructure health check probing Neo4j connectivity, index states, LLM reachability, and disk limits. |
+| 055 | - | Issue #70: add /api/status infrastructure health check | feature | direct | low | ported | `port/055` | GET /api/status telemetry probing Neo4j, LLM endpoint, and disk limits; reviewer APPROVE, tester PASS, 856 tests pass. |
 | 056 | - | Issue #71: fast-path graph ingestion for structured social actions without LLM NER | feature | adapt | medium | pending | `port/056` | Direct Cypher batch ingestion for structured OASIS agent activities bypassing LLM NER. |
 
 ## Skipped (with reason)
