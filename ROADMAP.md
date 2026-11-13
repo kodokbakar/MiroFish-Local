@@ -70,11 +70,11 @@ Forked from [nikmcfly/MiroFish-Offline](https://github.com/nikmcfly/MiroFish-Off
 ## Upcoming Milestones
 
 ### v0.6.0 — Enhanced Simulation & Real-time Streaming
-- [ ] Real-time simulation stream via SSE/WebSocket to eliminate polling `setInterval` timers in frontend.
+- [ ] Real-time simulation stream via SSE/WebSocket to eliminate polling `setInterval` timers in frontend (#75)
 - [x] Agent memory persistence across simulation rounds directly to Neo4j.
-- [ ] Process Group isolation (`start_new_session`) to guarantee full termination of child OASIS subprocesses.
+- [ ] Process Group isolation (`start_new_session`) to guarantee full termination of child OASIS subprocesses (#76)
 - [x] Export simulation transcripts as structured JSON.
-- [ ] Custom agent archetypes: define personality templates beyond OASIS defaults.
+- [ ] Custom agent archetypes: define personality templates beyond OASIS defaults (#77)
 
 ### v0.7.0 — Graph Intelligence & Visual Scale
 - [ ] Visual level-of-detail and node rendering cap (top 300 degree nodes) in D3 to prevent browser main-thread freeze.
