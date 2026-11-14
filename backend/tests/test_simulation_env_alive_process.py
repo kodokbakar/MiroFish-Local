@@ -11,7 +11,7 @@ causing WSGI threads to hang on IPC polling.
 
 import json
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
 
@@ -296,3 +296,187 @@ def test_interview_agents_batch_raises_value_error_immediately_when_process_dead
             interviews=[{"agent_id": 1, "prompt": "Hello"}],
         )
 
+
+
+# ============== Edge-case tests ==============
+
+
+@pytest.mark.parametrize("corrupted_content", [
+    "{invalid_json: true,",
+    "not even json",
+    "   ",
+])
+def test_check_env_alive_malformed_json_returns_false(clean_simulation_runner, corrupted_content):
+    """
+    Malformed or corrupted JSON in env_status.json must return False gracefully
+    both when process is running and when process is dead.
+    """
+    sim_id = "sim_malformed_json_12"
+    sim_dir = os.path.join(clean_simulation_runner, sim_id)
+    os.makedirs(sim_dir, exist_ok=True)
+    status_file = os.path.join(sim_dir, "env_status.json")
+    with open(status_file, "w", encoding="utf-8") as f:
+        f.write(corrupted_content)
+
+    # 1. With live process
+    live_proc = _create_mock_process(pid=12345, returncode=None)
+    SimulationRunner._processes[sim_id] = live_proc
+    assert SimulationRunner.check_env_alive(sim_id) is False
+
+    # 2. With dead process
+    dead_proc = _create_mock_process(pid=12345, returncode=1)
+    SimulationRunner._processes[sim_id] = dead_proc
+    assert SimulationRunner.check_env_alive(sim_id) is False
+
+
+def test_check_env_alive_empty_file_returns_false(clean_simulation_runner):
+    """Empty env_status.json must return False gracefully."""
+    sim_id = "sim_empty_file_13"
+    sim_dir = os.path.join(clean_simulation_runner, sim_id)
+    os.makedirs(sim_dir, exist_ok=True)
+    status_file = os.path.join(sim_dir, "env_status.json")
+    with open(status_file, "w", encoding="utf-8") as f:
+        f.write("")
+
+    live_proc = _create_mock_process(pid=12345, returncode=None)
+    SimulationRunner._processes[sim_id] = live_proc
+    assert SimulationRunner.check_env_alive(sim_id) is False
+
+
+@pytest.mark.parametrize("non_dict_json", [
+    "[]",
+    "[\"alive\"]",
+    "\"alive\"",
+    "123",
+    "null",
+    "true",
+])
+def test_check_env_alive_non_dict_json_returns_false(clean_simulation_runner, non_dict_json):
+    """
+    When env_status.json contains valid JSON that is not a dict (list, string, int, null, bool),
+    check_env_alive must return False gracefully without raising AttributeError or TypeError.
+    """
+    sim_id = "sim_non_dict_14"
+    sim_dir = os.path.join(clean_simulation_runner, sim_id)
+    os.makedirs(sim_dir, exist_ok=True)
+    status_file = os.path.join(sim_dir, "env_status.json")
+    with open(status_file, "w", encoding="utf-8") as f:
+        f.write(non_dict_json)
+
+    live_proc = _create_mock_process(pid=12345, returncode=None)
+    SimulationRunner._processes[sim_id] = live_proc
+    assert SimulationRunner.check_env_alive(sim_id) is False
+
+
+def test_check_env_alive_nonexistent_simulation_id_returns_false(clean_simulation_runner):
+    """Non-existent simulation_id returns False gracefully without raising exception."""
+    assert SimulationRunner.check_env_alive("completely_nonexistent_sim_999") is False
+
+
+def test_env_status_endpoint_nonexistent_simulation_returns_gracefully(app_client):
+    """API endpoint POST /api/simulation/env-status with nonexistent simulation_id returns 200 with env_alive=False."""
+    response = app_client.post(
+        "/api/simulation/env-status",
+        json={"simulation_id": "sim_nonexistent_999"},
+    )
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["success"] is True
+    assert data["data"]["env_alive"] is False
+
+
+def test_check_env_alive_returns_false_for_zombie_process(clean_simulation_runner):
+    """
+    When PID exists in OS process table but is a dead zombie process (/proc check State: Z),
+    check_env_alive must return False.
+    """
+    sim_id = "sim_zombie_15"
+    sim_dir = os.path.join(clean_simulation_runner, sim_id)
+    os.makedirs(sim_dir, exist_ok=True)
+    _write_env_status(sim_dir, status="alive")
+
+    state = SimulationRunState(
+        simulation_id=sim_id,
+        runner_status=RunnerStatus.RUNNING,
+        process_pid=77889,
+    )
+    SimulationRunner._save_run_state(state)
+
+    zombie_proc_status = "Name:\tpython\nState:\tZ (zombie)\nTgid:\t77889\nPid:\t77889\n"
+    with (
+        patch("os.kill", return_value=None),
+        patch("os.path.exists", side_effect=lambda p: p in {"/proc/77889/status", sim_dir, os.path.join(sim_dir, "env_status.json")}),
+        patch("builtins.open", mock_open(read_data=zombie_proc_status)),
+    ):
+        assert SimulationRunner.check_env_alive(sim_id) is False
+
+
+def test_check_env_alive_returns_false_for_unrelated_process_permission_error(clean_simulation_runner):
+    """
+    When PID exists in OS but is owned by another user/unrelated process
+    causing os.kill(pid, 0) to raise PermissionError (EPERM), check_env_alive must return False.
+    """
+    sim_id = "sim_unrelated_proc_16"
+    sim_dir = os.path.join(clean_simulation_runner, sim_id)
+    os.makedirs(sim_dir, exist_ok=True)
+    _write_env_status(sim_dir, status="alive")
+
+    state = SimulationRunState(
+        simulation_id=sim_id,
+        runner_status=RunnerStatus.RUNNING,
+        process_pid=1,
+    )
+    SimulationRunner._save_run_state(state)
+
+    with patch("os.kill", side_effect=PermissionError(1, "Operation not permitted")):
+        assert SimulationRunner.check_env_alive(sim_id) is False
+
+
+def test_interview_agent_process_dies_during_call_raises_timeout(clean_simulation_runner):
+    """
+    Race condition: process is alive during check_env_alive check, but dies right after.
+    The IPC call must raise TimeoutError when timeout expires rather than hanging indefinitely.
+    """
+    sim_id = "sim_race_timeout_17"
+    sim_dir = os.path.join(clean_simulation_runner, sim_id)
+    os.makedirs(sim_dir, exist_ok=True)
+    _write_env_status(sim_dir, status="alive")
+
+    live_proc = _create_mock_process(pid=88990, returncode=None)
+    SimulationRunner._processes[sim_id] = live_proc
+
+    with pytest.raises(TimeoutError, match="Timeout waiting for command response"):
+        SimulationRunner.interview_agent(
+            simulation_id=sim_id,
+            agent_id=1,
+            prompt="Hello after process died",
+            timeout=0.1,
+        )
+
+
+def test_interview_endpoint_race_timeout_returns_504(clean_simulation_runner, app_client):
+    """
+    Race condition via API: process dies right after check_env_alive check,
+    causing interview call to time out; endpoint returns HTTP 504.
+    """
+    sim_id = "sim_race_api_504_18"
+    sim_dir = os.path.join(clean_simulation_runner, sim_id)
+    os.makedirs(sim_dir, exist_ok=True)
+    _write_env_status(sim_dir, status="alive")
+
+    live_proc = _create_mock_process(pid=88991, returncode=None)
+    SimulationRunner._processes[sim_id] = live_proc
+
+    response = app_client.post(
+        "/api/simulation/interview",
+        json={
+            "simulation_id": sim_id,
+            "agent_id": 1,
+            "prompt": "Hello race condition",
+            "timeout": 0.1,
+        },
+    )
+    assert response.status_code == 504
+    data = response.get_json()
+    assert data["success"] is False
+    assert "timeout" in data["error"].lower()
