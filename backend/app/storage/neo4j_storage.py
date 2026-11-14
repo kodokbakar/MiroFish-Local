@@ -295,6 +295,8 @@ class Neo4jStorage(GraphStorage):
         if ontology is None:
             ontology = self.get_ontology(graph_id)
         extraction = self.extract_text(text, ontology)
+        if simulation_id is None and round_num == 0:
+            return self.persist_extraction(graph_id, text, extraction)
         return self.persist_extraction(
             graph_id,
             text,
