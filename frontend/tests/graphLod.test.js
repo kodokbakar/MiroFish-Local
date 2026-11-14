@@ -126,3 +126,113 @@ test('shouldShowElementLabel at scale < 0.8 hides secondary labels unless hovere
   assert.equal(shouldShowElementLabel({ scale: 0.5, isHighDegree: true }), true)
   assert.equal(shouldShowElementLabel({ scale: 0.3, isHovered: false, isSelected: false, isHighDegree: false }), false)
 })
+
+test('empty nodes and empty edges handling', () => {
+  const degrees = calculateNodeDegrees([], [])
+  assert.deepEqual(degrees, {})
+
+  const res = filterVisibleGraph({ nodes: [], edges: [], cap: 100, injectedNodeIds: [] })
+  assert.equal(res.totalNodeCount, 0)
+  assert.equal(res.visibleNodeCount, 0)
+  assert.deepEqual(res.visibleNodes, [])
+  assert.deepEqual(res.visibleEdges, [])
+  assert.deepEqual(res.offscreenNodes, [])
+
+  const searchRes = searchOffscreenNodes([], [], 'query')
+  assert.deepEqual(searchRes, [])
+})
+
+test('malformed edges with missing source/target or null IDs', () => {
+  const nodes = [{ uuid: 'n1' }, { uuid: 'n2' }]
+  const edges = [
+    { source_node_uuid: null, target_node_uuid: 'n1' },
+    { source_node_uuid: 'n2', target_node_uuid: undefined },
+    { source: null, target: null },
+    {},
+    { source: { id: null }, target: { id: 'n2' } },
+    { source_node_uuid: 'n1', target_node_uuid: 'n2' }
+  ]
+
+  const degrees = calculateNodeDegrees(nodes, edges)
+  assert.equal(degrees['n1'], 2) // 1 from {null -> n1}, 1 from {n1 -> n2}
+  assert.equal(degrees['n2'], 3) // 1 from {n2 -> undefined}, 1 from {null -> n2}, 1 from {n1 -> n2}
+
+  const res = filterVisibleGraph({ nodes, edges, cap: 2 })
+  assert.equal(res.visibleNodeCount, 2)
+  // Only the edge with valid source and target matching visible nodes should be kept
+  assert.equal(res.visibleEdges.length, 1)
+  assert.equal(res.visibleEdges[0].source_node_uuid, 'n1')
+  assert.equal(res.visibleEdges[0].target_node_uuid, 'n2')
+})
+
+test('nodes with identical degrees break ties stably by name or id', () => {
+  const nodes = [
+    { uuid: 'id-c', name: 'Zeta' },
+    { uuid: 'id-a', name: 'Alpha' },
+    { uuid: 'id-b', name: 'Beta' },
+    { uuid: 'id-d', name: '' } // empty name falls back to id
+  ]
+  const edges = [] // all degree 0
+
+  const res = filterVisibleGraph({ nodes, edges, cap: 2 })
+  assert.equal(res.visibleNodeCount, 2)
+  // 'Alpha' (id-a), 'Beta' (id-b) come before 'id-d' and 'Zeta' (id-c) in alphabetical order
+  assert.equal(res.visibleNodes[0].uuid, 'id-a')
+  assert.equal(res.visibleNodes[1].uuid, 'id-b')
+})
+
+test('injected nodes that do not exist in original dataset do not crash or create invalid nodes', () => {
+  const nodes = [{ uuid: 'n1', name: 'Node 1' }, { uuid: 'n2', name: 'Node 2' }]
+  const edges = [{ source_node_uuid: 'n1', target_node_uuid: 'n2' }]
+
+  const res = filterVisibleGraph({
+    nodes,
+    edges,
+    cap: 1,
+    injectedNodeIds: ['non-existent-999', 'ghost-node']
+  })
+
+  // visibleNodes should contain n1 or n2 based on cap, but NOT fictitious objects
+  const visibleIds = res.visibleNodes.map(n => n.uuid)
+  assert.ok(!visibleIds.includes('non-existent-999'))
+  assert.ok(!visibleIds.includes('ghost-node'))
+  assert.equal(res.visibleNodeCount, 1)
+  assert.equal(res.totalNodeCount, 2)
+})
+
+test('duplicate injected node IDs do not cause duplicate visible nodes', () => {
+  const nodes = [
+    { uuid: 'n1', name: 'Node 1' },
+    { uuid: 'n2', name: 'Node 2' },
+    { uuid: 'n3', name: 'Node 3' }
+  ]
+  const edges = []
+
+  const res = filterVisibleGraph({
+    nodes,
+    edges,
+    cap: 1,
+    injectedNodeIds: ['n2', 'n2', 'n2', 'n1', 'n1']
+  })
+
+  const visibleIds = res.visibleNodes.map(n => n.uuid)
+  assert.equal(res.visibleNodeCount, 2) // n1 and n2
+  const uniqueIds = new Set(visibleIds)
+  assert.equal(uniqueIds.size, visibleIds.length)
+})
+
+test('zoom scale boundary conditions: exact 0.8, negative scale, extreme zoom scale', () => {
+  // Exact 0.8 boundary: scale >= 0.8 returns true regardless of flags
+  assert.equal(shouldShowElementLabel({ scale: 0.8, isHovered: false, isSelected: false, isHighDegree: false }), true)
+  assert.equal(shouldShowElementLabel({ scale: 0.799999, isHovered: false, isSelected: false, isHighDegree: false }), false)
+  assert.equal(shouldShowElementLabel({ scale: 0.799999, isHovered: true }), true)
+
+  // Negative scale
+  assert.equal(shouldShowElementLabel({ scale: -1, isHovered: false, isSelected: false, isHighDegree: false }), false)
+  assert.equal(shouldShowElementLabel({ scale: -0.5, isHovered: true }), true)
+
+  // Extreme zoom scales
+  assert.equal(shouldShowElementLabel({ scale: 1000000, isHovered: false }), true)
+  assert.equal(shouldShowElementLabel({ scale: 0.00001, isHovered: false }), false)
+  assert.equal(shouldShowElementLabel({ scale: 0.00001, isSelected: true }), true)
+})
