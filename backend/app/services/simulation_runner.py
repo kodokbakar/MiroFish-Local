@@ -1763,6 +1763,8 @@ class SimulationRunner:
                         current = json.load(f)
                 except (json.JSONDecodeError, OSError):
                     current = {}
+            if not isinstance(current, dict):
+                current = {}
             current["status"] = "stopped"
             current["twitter_available"] = False
             current["reddit_available"] = False
@@ -1824,6 +1826,8 @@ class SimulationRunner:
         try:
             with open(status_file, 'r', encoding='utf-8') as f:
                 status = json.load(f)
+            if not isinstance(status, dict):
+                return default_status
             return {
                 "status": status.get("status", "stopped"),
                 "twitter_available": status.get("twitter_available", False),
