@@ -40,7 +40,18 @@ def create_app(config_class=Config):
         logger.info("=" * 50)
 
     # Enable CORS
-    CORS(app, resources={r"/api/*": {"origins": "*"}})
+    cors_origins = app.config.get('CORS_ALLOWED_ORIGINS')
+    env_origins = os.environ.get('CORS_ALLOWED_ORIGINS')
+    if env_origins:
+        allowed_origins = [origin.strip() for origin in env_origins.split(',') if origin.strip()]
+    elif isinstance(cors_origins, str):
+        allowed_origins = [origin.strip() for origin in cors_origins.split(',') if origin.strip()]
+    elif cors_origins is not None:
+        allowed_origins = cors_origins
+    else:
+        allowed_origins = Config.get_cors_allowed_origins()
+
+    CORS(app, resources={r"/api/*": {"origins": allowed_origins}})
 
     # --- Initialize Neo4jStorage singleton (DI via app.extensions) ---
     from .storage import Neo4jStorage
