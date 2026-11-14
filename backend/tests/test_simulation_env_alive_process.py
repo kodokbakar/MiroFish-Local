@@ -223,3 +223,76 @@ def test_interview_endpoint_rejects_immediately_when_process_dead(clean_simulati
         assert data["success"] is False
         assert "not running or closed" in data["error"]
         mock_interview.assert_not_called()
+
+
+def test_check_env_alive_updates_env_status_file_to_stopped(clean_simulation_runner):
+    """When check_env_alive finds OS process is dead, env_status.json should be marked stopped."""
+    sim_id = "sim_status_update_8"
+    sim_dir = os.path.join(clean_simulation_runner, sim_id)
+    os.makedirs(sim_dir, exist_ok=True)
+    _write_env_status(sim_dir, status="alive")
+
+    dead_proc = _create_mock_process(pid=88888, returncode=1)
+    SimulationRunner._processes[sim_id] = dead_proc
+
+    assert SimulationRunner.check_env_alive(sim_id) is False
+
+    status_file = os.path.join(sim_dir, "env_status.json")
+    with open(status_file, "r", encoding="utf-8") as f:
+        status_data = json.load(f)
+    assert status_data["status"] == "stopped"
+
+
+def test_stop_simulation_updates_env_status_file_to_stopped(clean_simulation_runner):
+    """When stop_simulation is called, env_status.json should be marked stopped."""
+    sim_id = "sim_stop_sim_9"
+    sim_dir = os.path.join(clean_simulation_runner, sim_id)
+    os.makedirs(sim_dir, exist_ok=True)
+    _write_env_status(sim_dir, status="alive")
+
+    state = SimulationRunState(
+        simulation_id=sim_id,
+        runner_status=RunnerStatus.RUNNING,
+        process_pid=99999,
+    )
+    SimulationRunner._save_run_state(state)
+
+    with patch.object(SimulationRunner, "_is_pid_alive", return_value=False):
+        SimulationRunner.stop_simulation(sim_id)
+
+    status_file = os.path.join(sim_dir, "env_status.json")
+    with open(status_file, "r", encoding="utf-8") as f:
+        status_data = json.load(f)
+    assert status_data["status"] == "stopped"
+
+
+def test_interview_agent_raises_value_error_immediately_when_process_dead(clean_simulation_runner):
+    """SimulationRunner.interview_agent must fail-fast with ValueError when process is dead."""
+    sim_id = "sim_interview_direct_10"
+    sim_dir = os.path.join(clean_simulation_runner, sim_id)
+    os.makedirs(sim_dir, exist_ok=True)
+    _write_env_status(sim_dir, status="alive")
+
+    dead_proc = _create_mock_process(pid=77777, returncode=1)
+    SimulationRunner._processes[sim_id] = dead_proc
+
+    with pytest.raises(ValueError, match="not running or closed"):
+        SimulationRunner.interview_agent(simulation_id=sim_id, agent_id=1, prompt="Hello")
+
+
+def test_interview_agents_batch_raises_value_error_immediately_when_process_dead(clean_simulation_runner):
+    """SimulationRunner.interview_agents_batch must fail-fast with ValueError when process is dead."""
+    sim_id = "sim_batch_direct_11"
+    sim_dir = os.path.join(clean_simulation_runner, sim_id)
+    os.makedirs(sim_dir, exist_ok=True)
+    _write_env_status(sim_dir, status="alive")
+
+    dead_proc = _create_mock_process(pid=66666, returncode=1)
+    SimulationRunner._processes[sim_id] = dead_proc
+
+    with pytest.raises(ValueError, match="not running or closed"):
+        SimulationRunner.interview_agents_batch(
+            simulation_id=sim_id,
+            interviews=[{"agent_id": 1, "prompt": "Hello"}],
+        )
+
