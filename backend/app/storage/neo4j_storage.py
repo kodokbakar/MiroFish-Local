@@ -1002,20 +1002,38 @@ class Neo4jStorage(GraphStorage):
         with self._driver.session() as session:
             return self._call_with_retry(session.execute_read, _read)
 
-    def get_graph_data(self, graph_id: str) -> Dict[str, Any]:
+    def get_graph_data(
+        self, graph_id: str, include_embeddings: bool = False
+    ) -> Dict[str, Any]:
         """
         Full graph dump with enriched edge format (for frontend).
         Includes derived fields: fact_type, source_node_name, target_node_name.
+        When include_embeddings is False, raw vector embeddings are pruned via
+        map projection over Bolt to reduce network serialization overhead.
         """
         def _read(tx):
             # Get all nodes
-            node_result = tx.run(
-                """
+            if include_embeddings:
+                node_query = """
                 MATCH (n:Entity {graph_id: $gid})
                 RETURN n, labels(n) AS labels
-                """,
-                gid=graph_id,
-            )
+                """
+            else:
+                node_query = """
+                MATCH (n:Entity {graph_id: $gid})
+                RETURN n {
+                    .uuid,
+                    .name,
+                    .summary,
+                    .attributes_json,
+                    .created_at,
+                    .graph_id,
+                    .degree,
+                    .community_id
+                } AS n, labels(n) AS labels
+                """
+
+            node_result = tx.run(node_query, gid=graph_id)
             nodes = []
             node_map: Dict[str, str] = {}  # uuid -> name
             for record in node_result:
@@ -1024,14 +1042,31 @@ class Neo4jStorage(GraphStorage):
                 node_map[nd["uuid"]] = nd["name"]
 
             # Get all edges with source/target node names (JOIN)
-            edge_result = tx.run(
-                """
+            if include_embeddings:
+                edge_query = """
                 MATCH (src:Entity)-[r:RELATION {graph_id: $gid}]->(tgt:Entity)
                 RETURN r, src.uuid AS src_uuid, tgt.uuid AS tgt_uuid,
                        src.name AS src_name, tgt.name AS tgt_name
-                """,
-                gid=graph_id,
-            )
+                """
+            else:
+                edge_query = """
+                MATCH (src:Entity)-[r:RELATION {graph_id: $gid}]->(tgt:Entity)
+                RETURN r {
+                    .uuid,
+                    .name,
+                    .fact,
+                    .attributes_json,
+                    .created_at,
+                    .valid_at,
+                    .invalid_at,
+                    .expired_at,
+                    .episode_ids,
+                    .graph_id
+                } AS r, src.uuid AS src_uuid, tgt.uuid AS tgt_uuid,
+                       src.name AS src_name, tgt.name AS tgt_name
+                """
+
+            edge_result = tx.run(edge_query, gid=graph_id)
             edges = []
             for record in edge_result:
                 ed = self._edge_to_dict(record["r"], record["src_uuid"], record["tgt_uuid"])

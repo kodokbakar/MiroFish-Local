@@ -311,9 +311,13 @@ class GraphBuilderService:
             entity_types=info.get("entity_types", []),
         )
 
-    def get_graph_data(self, graph_id: str) -> Dict[str, Any]:
+    def get_graph_data(
+        self, graph_id: str, include_embeddings: bool = False
+    ) -> Dict[str, Any]:
         """Get complete graph data (including details)"""
-        return self.storage.get_graph_data(graph_id)
+        return self.storage.get_graph_data(
+            graph_id, include_embeddings=include_embeddings
+        )
 
     def delete_graph(self, graph_id: str):
         """Delete graph"""

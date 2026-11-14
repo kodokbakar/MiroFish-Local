@@ -638,9 +638,10 @@ def get_graph_data(graph_id: str):
     Get graph data (nodes and edges)
     """
     try:
+        include_embeddings = request.args.get('include_embeddings', 'false').lower() in ('true', '1', 'yes')
         storage = _get_storage()
         builder = GraphBuilderService(storage=storage)
-        graph_data = builder.get_graph_data(graph_id)
+        graph_data = builder.get_graph_data(graph_id, include_embeddings=include_embeddings)
 
         return jsonify({
             "success": True,
