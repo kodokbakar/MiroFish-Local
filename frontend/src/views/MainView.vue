@@ -62,11 +62,47 @@
         <!-- Step 2: Env Setup -->
         <Step2EnvSetup
           v-else-if="currentStep === 2"
+          :simulationId="effectiveSimulationId"
           :projectData="projectData"
           :graphData="graphData"
           :systemLogs="systemLogs"
           @go-back="handleGoBack"
           @next-step="handleNextStep"
+          @add-log="addLog"
+        />
+        <!-- Step 3: Simulation -->
+        <Step3Simulation
+          v-else-if="currentStep === 3"
+          :simulationId="effectiveSimulationId"
+          :maxRounds="maxRounds"
+          :projectData="projectData"
+          :graphData="graphData"
+          :systemLogs="systemLogs"
+          @go-back="handleGoBack"
+          @next-step="handleNextStep"
+          @add-log="addLog"
+        />
+        <!-- Step 4: Report -->
+        <Step4Report
+          v-else-if="currentStep === 4"
+          :simulationId="effectiveSimulationId"
+          :reportId="reportId"
+          :projectData="projectData"
+          :graphData="graphData"
+          :systemLogs="systemLogs"
+          @go-back="handleGoBack"
+          @next-step="handleNextStep"
+          @add-log="addLog"
+        />
+        <!-- Step 5: Interaction -->
+        <Step5Interaction
+          v-else-if="currentStep === 5"
+          :simulationId="effectiveSimulationId"
+          :reportId="reportId"
+          :projectData="projectData"
+          :graphData="graphData"
+          :systemLogs="systemLogs"
+          @go-back="handleGoBack"
           @add-log="addLog"
         />
       </div>
@@ -75,13 +111,31 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import GraphPanel from '../components/GraphPanel.vue'
 import Step1GraphBuild from '../components/Step1GraphBuild.vue'
 import Step2EnvSetup from '../components/Step2EnvSetup.vue'
+import Step3Simulation from '../components/Step3Simulation.vue'
+import Step4Report from '../components/Step4Report.vue'
+import Step5Interaction from '../components/Step5Interaction.vue'
 import { generateOntology, getProject, buildGraph, getTaskStatus, getGraphData } from '../api/graph'
 import { getPendingUpload, clearPendingUpload } from '../store/pendingUpload'
+
+const props = defineProps({
+  simulationId: {
+    type: String,
+    default: ''
+  },
+  projectId: {
+    type: String,
+    default: ''
+  },
+  reportId: {
+    type: String,
+    default: ''
+  }
+})
 
 const route = useRoute()
 const router = useRouter()
@@ -94,7 +148,25 @@ const currentStep = ref(1) // 1: Graph Build, 2: Env Setup, 3: Simulation, 4: Re
 const stepNames = ['Graph Build', 'Env Setup', 'Simulation', 'Report', 'Interaction']
 
 // Data State
-const currentProjectId = ref(route.params.projectId)
+const currentProjectId = ref(props.projectId || route.params.projectId || '')
+const simulationIdState = ref('')
+const reportId = ref(props.reportId || route.params.reportId || '')
+const maxRounds = ref(null)
+
+const effectiveSimulationId = computed(() => {
+  return props.simulationId || route.params.simulationId || simulationIdState.value || projectData.value?.simulation_id || ''
+})
+
+watch(() => props.projectId, (newVal) => {
+  if (newVal) currentProjectId.value = newVal
+})
+watch(() => props.reportId, (newVal) => {
+  if (newVal) reportId.value = newVal
+})
+watch(() => props.simulationId, (newVal) => {
+  if (newVal) simulationIdState.value = newVal
+})
+
 const loading = ref(false)
 const graphLoading = ref(false)
 const error = ref('')
@@ -157,6 +229,15 @@ const toggleMaximize = (target) => {
 }
 
 const handleNextStep = (params = {}) => {
+  if (params?.reportId) {
+    reportId.value = params.reportId
+  }
+  if (params?.simulationId) {
+    simulationIdState.value = params.simulationId
+  }
+  if (params?.maxRounds) {
+    maxRounds.value = params.maxRounds
+  }
   if (currentStep.value < 5) {
     currentStep.value++
     addLog(`Entering Step ${currentStep.value}: ${stepNames[currentStep.value - 1]}`)
@@ -181,7 +262,7 @@ const initProject = async () => {
   addLog('Project view initialized.')
   if (currentProjectId.value === 'new') {
     await handleNewProject()
-  } else {
+  } else if (currentProjectId.value) {
     await loadProject()
   }
 }
