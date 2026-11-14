@@ -16,7 +16,7 @@ def node_to_dict(node: Any, labels: List[str]) -> Dict[str, Any]:
         attributes = json.loads(attrs_json) if attrs_json else {}
     except (json.JSONDecodeError, TypeError):
         attributes = {}
-    return {
+    res = {
         "uuid": props.get("uuid", ""),
         "name": props.get("name", ""),
         "labels": [label for label in labels if label != "Entity"] if labels else [],
@@ -24,6 +24,9 @@ def node_to_dict(node: Any, labels: List[str]) -> Dict[str, Any]:
         "attributes": attributes,
         "created_at": props.get("created_at"),
     }
+    if "community_id" in props and props["community_id"] is not None:
+        res["community_id"] = props["community_id"]
+    return res
 
 
 def edge_to_dict(

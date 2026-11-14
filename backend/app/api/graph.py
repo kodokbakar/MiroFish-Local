@@ -677,3 +677,25 @@ def delete_graph(graph_id: str):
             "error": str(e),
             "traceback": traceback.format_exc()
         }), 500
+
+
+@graph_bp.route('/<graph_id>/communities', methods=['POST'])
+@graph_bp.route('/communities/<graph_id>', methods=['POST'])
+def detect_communities(graph_id: str):
+    """
+    Detect communities in the graph and persist community_id to nodes.
+    """
+    try:
+        storage = _get_storage()
+        summary = storage.detect_communities(graph_id)
+        return jsonify({
+            "code": 0,
+            "message": "success",
+            "data": summary
+        })
+    except Exception as e:
+        return jsonify({
+            "code": 1,
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }), 500

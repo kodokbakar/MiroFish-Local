@@ -9,6 +9,10 @@
       </div>
       <!-- Top Toolbar (Internal Top Right) -->
       <div class="header-tools">
+        <button class="tool-btn" @click="handleDetectCommunities" :disabled="loading || detecting" title="Detect Communities">
+          <span class="icon-community" :class="{ 'spinning': detecting }">⚯</span>
+          <span class="btn-text">{{ detecting ? 'Detecting...' : 'Detect Communities' }}</span>
+        </button>
         <!-- Node Cap Control -->
         <div class="cap-control-group">
           <span class="cap-label">Limit:</span>
@@ -47,7 +51,6 @@
             </div>
           </div>
         </div>
-
         <button class="tool-btn" @click="$emit('refresh')" :disabled="loading" title="Refresh graph">
           <span class="icon-refresh" :class="{ 'spinning': loading }">↻</span>
           <span class="btn-text">Refresh</span>
@@ -258,23 +261,47 @@
     </div>
 
     <!-- Bottom Legend (Bottom Left) -->
-    <div v-if="graphData && entityTypes.length" class="graph-legend">
-      <span class="legend-title">Entity Types</span>
+    <div v-if="graphData && currentLegendItems.length" class="graph-legend">
+      <span class="legend-title">{{ colorBy === 'community' ? 'Communities' : 'Entity Types' }}</span>
       <div class="legend-items">
-        <div class="legend-item" v-for="type in entityTypes" :key="type.name">
-          <span class="legend-dot" :style="{ background: type.color }"></span>
-          <span class="legend-label">{{ type.name }}</span>
+        <div class="legend-item" v-for="item in currentLegendItems" :key="item.name">
+          <span class="legend-dot" :style="{ background: item.color }"></span>
+          <span class="legend-label">{{ item.name }}</span>
         </div>
       </div>
     </div>
     
-    <!-- Show Edge Labels Toggle -->
-    <div v-if="graphData" class="edge-labels-toggle">
-      <label class="toggle-switch">
-        <input type="checkbox" v-model="showEdgeLabels" />
-        <span class="slider"></span>
-      </label>
-      <span class="toggle-label">Show Edge Labels</span>
+    <!-- Bottom Controls (Bottom Right / Controls Area) -->
+    <div v-if="graphData" class="graph-bottom-controls">
+      <!-- Color By Toggle -->
+      <div class="color-by-toggle">
+        <span class="control-label">Color by:</span>
+        <div class="toggle-buttons">
+          <button 
+            class="toggle-btn" 
+            :class="{ active: colorBy === 'type' }" 
+            @click="colorBy = 'type'"
+          >
+            Entity Type
+          </button>
+          <button 
+            class="toggle-btn" 
+            :class="{ active: colorBy === 'community' }" 
+            @click="colorBy = 'community'"
+          >
+            Community
+          </button>
+        </div>
+      </div>
+
+      <!-- Show Edge Labels Toggle -->
+      <div class="edge-labels-toggle">
+        <label class="toggle-switch">
+          <input type="checkbox" v-model="showEdgeLabels" />
+          <span class="slider"></span>
+        </label>
+        <span class="toggle-label">Show Edge Labels</span>
+      </div>
     </div>
   </div>
 </template>
@@ -282,6 +309,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted, watch, nextTick, computed } from 'vue'
 import * as d3 from 'd3'
+import { detectCommunities } from '../api/graph'
 import {
   calculateNodeDegrees,
   filterVisibleGraph,
@@ -302,6 +330,8 @@ const graphContainer = ref(null)
 const graphSvg = ref(null)
 const selectedItem = ref(null)
 const showEdgeLabels = ref(true) // Default show edge labels
+const colorBy = ref('type') // 'type' | 'community'
+const detecting = ref(false)
 const expandedSelfLoops = ref(new Set()) // Expanded self-loop items
 const showSimulationFinishedHint = ref(false) // Simulation finished hint
 const wasSimulating = ref(false) // Track whether was simulating before
@@ -398,6 +428,47 @@ const entityTypes = computed(() => {
   })
   return Object.values(typeMap)
 })
+
+const communityColorScale = d3.scaleOrdinal(d3.schemeTableau10)
+
+const communitiesList = computed(() => {
+  if (!props.graphData?.nodes) return []
+  const commMap = {}
+  props.graphData.nodes.forEach(node => {
+    if (node.community_id !== undefined && node.community_id !== null) {
+      const cid = node.community_id
+      if (!commMap[cid]) {
+        commMap[cid] = {
+          name: `Community ${cid}`,
+          count: 0,
+          color: communityColorScale(cid)
+        }
+      }
+      commMap[cid].count++
+    }
+  })
+  return Object.values(commMap)
+})
+
+const currentLegendItems = computed(() => {
+  return colorBy.value === 'community' ? communitiesList.value : entityTypes.value
+})
+
+const handleDetectCommunities = async () => {
+  if (!props.graphData?.graph_id || detecting.value) return
+  detecting.value = true
+  try {
+    const res = await detectCommunities(props.graphData.graph_id)
+    if (res.code === 0 || res.success) {
+      colorBy.value = 'community'
+      emit('refresh')
+    }
+  } catch (err) {
+    console.error('Community detection error:', err)
+  } finally {
+    detecting.value = false
+  }
+}
 
 // Format datetime
 const formatDateTime = (dateStr) => {
@@ -600,7 +671,12 @@ const renderGraph = () => {
   // Color scale
   const colorMap = {}
   entityTypes.value.forEach(t => colorMap[t.name] = t.color)
-  const getColor = (type) => colorMap[type] || '#999'
+  const getNodeColor = (d) => {
+    if (colorBy.value === 'community' && d.rawData?.community_id !== undefined && d.rawData?.community_id !== null) {
+      return communityColorScale(d.rawData.community_id)
+    }
+    return colorMap[d.type] || '#999'
+  }
 
   // Simulation - dynamically adjust node spacing based on edge count
   const simulation = d3.forceSimulation(nodes)
@@ -791,7 +867,7 @@ const renderGraph = () => {
     .data(nodes)
     .enter().append('circle')
     .attr('r', 10)
-    .attr('fill', d => getColor(d.type))
+    .attr('fill', d => getNodeColor(d))
     .attr('stroke', '#fff')
     .attr('stroke-width', 2.5)
     .style('cursor', 'pointer')
@@ -847,7 +923,7 @@ const renderGraph = () => {
         type: 'node',
         data: d.rawData,
         entityType: d.type,
-        color: getColor(d.type)
+        color: getNodeColor(d)
       }
     })
     .on('mouseenter', (event, d) => {
@@ -929,6 +1005,10 @@ const renderGraph = () => {
 watch(() => props.graphData, () => {
   nextTick(renderGraph)
 }, { deep: true })
+
+watch(colorBy, () => {
+  nextTick(renderGraph)
+})
 
 // Watch edge label show/hide toggle
 watch(showEdgeLabels, (newVal) => {
@@ -1231,9 +1311,6 @@ onUnmounted(() => {
 
 /* Edge Labels Toggle - Top Right */
 .edge-labels-toggle {
-  position: absolute;
-  top: 60px;
-  right: 20px;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -1242,7 +1319,67 @@ onUnmounted(() => {
   border-radius: 20px;
   border: 1px solid #E0E0E0;
   box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+}
+
+.graph-bottom-controls {
+  position: absolute;
+  top: 60px;
+  right: 20px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
   z-index: 10;
+}
+
+.color-by-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #FFF;
+  padding: 6px 12px;
+  border-radius: 20px;
+  border: 1px solid #E0E0E0;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+}
+
+.control-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: #666;
+}
+
+.toggle-buttons {
+  display: flex;
+  gap: 4px;
+  background: #F0F0F0;
+  padding: 2px;
+  border-radius: 14px;
+}
+
+.toggle-btn {
+  border: none;
+  background: transparent;
+  padding: 3px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  color: #666;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.toggle-btn.active {
+  background: #7B2D8E;
+  color: #FFF;
+  font-weight: 500;
+  box-shadow: 0 1px 3px rgba(123, 45, 142, 0.3);
+}
+
+.icon-community {
+  font-size: 14px;
+}
+
+.icon-community.spinning {
+  animation: spin 1s linear infinite;
 }
 
 .toggle-switch {

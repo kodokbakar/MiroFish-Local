@@ -58,6 +58,18 @@ export function getGraphData(graphId) {
 }
 
 /**
+ * Detect communities in graph
+ * @param {String} graphId - Graph ID
+ * @returns {Promise}
+ */
+export function detectCommunities(graphId) {
+  return service({
+    url: `/api/graph/${graphId}/communities`,
+    method: 'post'
+  })
+}
+
+/**
  * Get project information
  * @param {String} projectId - Project ID
  * @returns {Promise}

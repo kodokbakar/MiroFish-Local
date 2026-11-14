@@ -1089,6 +1089,145 @@ class Neo4jStorage(GraphStorage):
         with self._driver.session() as session:
             return self._call_with_retry(session.execute_read, _read)
 
+    def detect_communities(
+        self, graph_id: str, algorithm: str = "louvain"
+    ) -> Dict[str, Any]:
+        """
+        Detect entity communities in graph and persist community_id to nodes.
+        Checks for Neo4j GDS; if absent or fails, falls back cleanly to NetworkX.
+        """
+        if self._check_gds_available():
+            try:
+                return self._detect_communities_gds(graph_id, algorithm)
+            except Exception as e:
+                logger.warning(f"Neo4j GDS community detection failed, falling back to NetworkX: {e}")
+
+        return self._detect_communities_networkx(graph_id)
+
+    def _check_gds_available(self) -> bool:
+        def _read(tx):
+            res = tx.run("SHOW PROCEDURES YIELD name WHERE name = 'gds.louvain.stream'")
+            return res.single() is not None
+
+        try:
+            with self._driver.session() as session:
+                return self._call_with_retry(session.execute_read, _read)
+        except Exception:
+            return False
+
+    def _detect_communities_gds(self, graph_id: str, algorithm: str) -> Dict[str, Any]:
+        raise NotImplementedError("GDS louvain stream not configured in Community Edition")
+
+    def _detect_communities_networkx(self, graph_id: str) -> Dict[str, Any]:
+        import networkx as nx
+        import networkx.algorithms.community as nx_comm
+
+        def _fetch_graph_data(tx):
+            node_res = tx.run(
+                "MATCH (n:Entity {graph_id: $gid}) RETURN n.uuid AS uuid, n.name AS name, labels(n) AS labels",
+                gid=graph_id,
+            )
+            nodes = [
+                {
+                    "uuid": r["uuid"],
+                    "name": r["name"] or "",
+                    "labels": [lbl for lbl in (r["labels"] or []) if lbl != "Entity"],
+                }
+                for r in node_res
+                if r["uuid"]
+            ]
+
+            edge_res = tx.run(
+                """
+                MATCH (src:Entity)-[r:RELATION {graph_id: $gid}]->(tgt:Entity)
+                RETURN src.uuid AS source, tgt.uuid AS target, r.weight AS weight
+                """,
+                gid=graph_id,
+            )
+            edges = [
+                {
+                    "source": r["source"],
+                    "target": r["target"],
+                    "weight": float(r["weight"]) if r["weight"] is not None else 1.0,
+                }
+                for r in edge_res
+                if r["source"] and r["target"]
+            ]
+            return nodes, edges
+
+        with self._driver.session() as session:
+            nodes, edges = self._call_with_retry(session.execute_read, _fetch_graph_data)
+
+        if not nodes:
+            return {"communities": [], "total_communities": 0, "total_nodes": 0}
+
+        G = nx.Graph()
+        node_lookup = {}
+        for n in nodes:
+            G.add_node(n["uuid"], name=n["name"], labels=n["labels"])
+            node_lookup[n["uuid"]] = n
+
+        for e in edges:
+            if G.has_edge(e["source"], e["target"]):
+                G[e["source"]][e["target"]]["weight"] += e["weight"]
+            else:
+                G.add_edge(e["source"], e["target"], weight=e["weight"])
+
+        community_sets = nx_comm.louvain_communities(G, seed=42)
+        # Sort communities deterministically by size descending, then first node uuid
+        sorted_communities = sorted(
+            community_sets,
+            key=lambda c: (-len(c), min(c) if c else ""),
+        )
+
+        updates = []
+        communities_summary = []
+        for cid, members in enumerate(sorted_communities):
+            for node_uuid in members:
+                updates.append({"uuid": node_uuid, "community_id": cid})
+
+            # Calculate degrees within community to pick top entities
+            subG = G.subgraph(members)
+            degrees = dict(subG.degree(weight="weight"))
+            top_member_uuids = sorted(members, key=lambda u: (-degrees.get(u, 0), node_lookup[u]["name"]))[:5]
+            top_entities = [node_lookup[u]["name"] for u in top_member_uuids if node_lookup.get(u)]
+
+            # Dominant labels
+            label_counts = defaultdict(int)
+            for u in members:
+                for lbl in node_lookup.get(u, {}).get("labels", []):
+                    label_counts[lbl] += 1
+            sorted_labels = sorted(label_counts.items(), key=lambda x: (-x[1], x[0]))
+            dominant_labels = [lbl for lbl, _ in sorted_labels[:3]]
+
+            communities_summary.append({
+                "id": cid,
+                "size": len(members),
+                "top_entities": top_entities,
+                "dominant_labels": dominant_labels,
+            })
+
+        if updates:
+            def _persist(tx):
+                tx.run(
+                    """
+                    UNWIND $updates AS u
+                    MATCH (n:Entity {uuid: u.uuid, graph_id: $gid})
+                    SET n.community_id = u.community_id
+                    """,
+                    updates=updates,
+                    gid=graph_id,
+                )
+
+            with self._driver.session() as session:
+                self._call_with_retry(session.execute_write, _persist)
+
+        return {
+            "communities": communities_summary,
+            "total_communities": len(communities_summary),
+            "total_nodes": len(nodes),
+        }
+
     # ----------------------------------------------------------------
     # Dict conversion helpers
     # ----------------------------------------------------------------
