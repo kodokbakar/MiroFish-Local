@@ -6,8 +6,9 @@ Step2: Entity reading and filtering, OASIS simulation preparation and execution 
 import csv
 import json
 import os
+import time
 import traceback
-from flask import request, jsonify, send_file, current_app
+from flask import request, jsonify, send_file, current_app, Response
 
 from . import simulation_bp
 from ..config import Config
@@ -1795,27 +1796,6 @@ def stop_simulation():
 def get_run_status(simulation_id: str):
     """
     Get simulation real-time running status（For frontend polling）
-    
-    Returns:
-        {
-            "success": true,
-            "data": {
-                "simulation_id": "sim_xxxx",
-                "runner_status": "running",
-                "current_round": 5,
-                "total_rounds": 144,
-                "progress_percent": 3.5,
-                "simulated_hours": 2,
-                "total_simulation_hours": 72,
-                "twitter_running": true,
-                "reddit_running": true,
-                "twitter_actions_count": 150,
-                "reddit_actions_count": 200,
-                "total_actions_count": 350,
-                "started_at": "2025-12-01T10:00:00",
-                "updated_at": "2025-12-01T10:30:00"
-            }
-        }
     """
     try:
         run_state = SimulationRunner.get_run_state(simulation_id)
@@ -1847,6 +1827,64 @@ def get_run_status(simulation_id: str):
             "error": str(e),
             "traceback": traceback.format_exc()
         }), 500
+
+
+@simulation_bp.route('/<simulation_id>/stream', methods=['GET'])
+def stream_simulation(simulation_id: str):
+    """
+    Server-Sent Events (SSE) endpoint for real-time simulation updates.
+    Streams state transitions and agent actions directly to client,
+    closing the connection upon completion or failure.
+    """
+    def event_generator():
+        last_action_count = -1
+        last_status = None
+        consecutive_idle = 0
+
+        while True:
+            try:
+                state = SimulationRunner.get_run_state(simulation_id)
+                if not state:
+                    yield f"data: {json.dumps({'simulation_id': simulation_id, 'runner_status': 'idle'})}\n\n"
+                    consecutive_idle += 1
+                    if consecutive_idle > 10:
+                        break
+                    time.sleep(1.0)
+                    continue
+
+                state_dict = state.to_dict()
+                status = state_dict.get("runner_status")
+                total_actions = state_dict.get("total_actions_count", 0)
+
+                # Push event if status changed or new actions occurred
+                if status != last_status or total_actions != last_action_count:
+                    yield f"data: {json.dumps(state_dict)}\n\n"
+                    last_status = status
+                    last_action_count = total_actions
+
+                if status in {"completed", "stopped", "failed"}:
+                    break
+
+                time.sleep(1.0)
+
+            except GeneratorExit:
+                logger.debug(f"SSE client disconnected from simulation stream {simulation_id}")
+                break
+            except Exception as e:
+                logger.error(f"Error in simulation SSE generator for {simulation_id}: {e}")
+                yield f"data: {json.dumps({'error': str(e), 'runner_status': 'failed'})}\n\n"
+                break
+
+    from flask import Response
+    return Response(
+        event_generator(),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @simulation_bp.route('/<simulation_id>/run-status/detail', methods=['GET'])
