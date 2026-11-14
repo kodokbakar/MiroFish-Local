@@ -154,3 +154,14 @@ class GraphStorage(ABC):
             graph_id, nodes, edges, node_count, edge_count
         Edge dicts include derived fields: fact_type, source_node_name, target_node_name
         """
+
+    @abstractmethod
+    def detect_communities(
+        self, graph_id: str, algorithm: str = "louvain"
+    ) -> Dict[str, Any]:
+        """
+        Detect entity communities in graph and persist community_id to nodes.
+
+        Returns summary dict:
+            {"communities": [...], "total_communities": N, "total_nodes": M}
+        """
