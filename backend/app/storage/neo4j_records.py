@@ -5,7 +5,12 @@ from typing import Any, Dict, List
 
 
 def node_to_dict(node: Any, labels: List[str]) -> Dict[str, Any]:
-    props = dict(node)
+    if isinstance(node, dict):
+        props = dict(node)
+    elif hasattr(node, "items"):
+        props = dict(node.items())
+    else:
+        props = dict(node)
     attrs_json = props.pop("attributes_json", "{}")
     try:
         attributes = json.loads(attrs_json) if attrs_json else {}
@@ -27,7 +32,12 @@ def node_to_dict(node: Any, labels: List[str]) -> Dict[str, Any]:
 def edge_to_dict(
     rel: Any, source_uuid: str, target_uuid: str
 ) -> Dict[str, Any]:
-    props = dict(rel)
+    if isinstance(rel, dict):
+        props = dict(rel)
+    elif hasattr(rel, "items"):
+        props = dict(rel.items())
+    else:
+        props = dict(rel)
     attrs_json = props.pop("attributes_json", "{}")
     try:
         attributes = json.loads(attrs_json) if attrs_json else {}
