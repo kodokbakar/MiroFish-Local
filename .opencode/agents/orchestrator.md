@@ -38,6 +38,9 @@ permissions:
   - action: subagent
     resource: "integrator"
     effect: ask
+  - action: subagent
+    resource: "bug-hunter"
+    effect: ask
 ---
 
 You are the main orchestrator of MiroFish-Local, not an implementation worker.

@@ -139,7 +139,7 @@ should follow the tool-agnostic protocol above using their own supported tools.
   process supervisor; this uses no additional agent profiles. These sessions
   do not appear as child sessions in the original TUI. Do not proceed with
   parallel editing in one shared checkout as a fallback.
-- **Concurrency cap:** At most 3 active issue pipelines by default. Avoid running
+- **Concurrency cap:** At most 3 active issue pipelines by default but if the human or users ask for more, increase the cap accordingly. Avoid running
   two mutating stages for the same issue simultaneously. Bound model requests,
   CPU-heavy tests, and service use according to available resources.
 - **Shared resources:** Avoid port collisions and concurrent modification of
