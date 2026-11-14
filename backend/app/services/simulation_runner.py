@@ -508,8 +508,7 @@ class SimulationRunner:
                 if not existing_thread.is_alive() and cls._monitor_threads.get(simulation_id) is existing_thread:
                     cls._monitor_threads.pop(simulation_id, None)
 
-            process = subprocess.Popen(
-                cmd,
+            popen_kwargs = dict(
                 cwd=sim_dir,
                 stdout=main_log_file,
                 stderr=subprocess.STDOUT,  # stderr also written to same file
@@ -517,7 +516,12 @@ class SimulationRunner:
                 encoding='utf-8',  # Explicitly specify encoding
                 bufsize=1,
                 env=env,  # Pass environment variables with UTF-8 settings
-                start_new_session=True,  # Create new process group, ensure all related processes terminate when server closes
+                **cls._get_process_group_kwargs(),
+            )
+
+            process = subprocess.Popen(
+                cmd,
+                **popen_kwargs,
             )
             
             # Save file handle for later closing
@@ -943,6 +947,13 @@ class SimulationRunner:
         return False
 
     @classmethod
+    def _get_process_group_kwargs(cls) -> Dict[str, Any]:
+        """Return platform-specific kwargs to spawn subprocess in its own process group."""
+        if IS_WINDOWS:
+            return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+        return {"start_new_session": True}
+
+    @classmethod
     def _terminate_pid(cls, pid: int, simulation_id: str, timeout: int = 10):
         """
         Cross-platform terminate process group by PID.
@@ -1039,19 +1050,37 @@ class SimulationRunner:
                     process.kill()
         else:
             # Unix: Use process group termination
-            # Since start_new_session=True, process group ID equals main process PID
-            pgid = os.getpgid(process.pid)
+            try:
+                pgid = os.getpgid(process.pid)
+            except (ProcessLookupError, OSError):
+                pgid = process.pid
+
             logger.info(f"Terminate process group (Unix): simulation={simulation_id}, pgid={pgid}")
             
             # First send SIGTERM to the entire process group
-            os.killpg(pgid, signal.SIGTERM)
+            try:
+                os.killpg(pgid, signal.SIGTERM)
+            except ProcessLookupError:
+                return
+            except OSError:
+                try:
+                    process.terminate()
+                except OSError:
+                    pass
             
             try:
                 process.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
                 # If still not ended after timeout, force send SIGKILL
                 logger.warning(f"Process group not responding to SIGTERM, force terminating: {simulation_id}")
-                os.killpg(pgid, signal.SIGKILL)
+                try:
+                    os.killpg(pgid, signal.SIGKILL)
+                except (ProcessLookupError, OSError):
+                    pass
+                try:
+                    process.kill()
+                except OSError:
+                    pass
                 process.wait(timeout=5)
     
     @classmethod

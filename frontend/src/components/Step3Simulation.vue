@@ -418,8 +418,7 @@ const doStartSimulation = async () => {
       phase.value = 1
       runStatus.value = res.data
 
-      startStatusPolling()
-      startDetailPolling()
+      startSimulationStream()
     } else {
       startError.value = res.error || 'Start failed'
       addLog(`✗ Start failed: ${res.error || 'Unknown error'}`)
@@ -459,19 +458,69 @@ const handleStopSimulation = async () => {
   }
 }
 
-// Polling status
+// Real-time SSE stream & Polling fallback
 let statusTimer = null
 let detailTimer = null
+let sseSource = null
+
+const startSimulationStream = () => {
+  if (!props.simulationId) return
+  if (sseSource) {
+    sseSource.close()
+    sseSource = null
+  }
+
+  // Check if EventSource is supported
+  if (typeof EventSource !== 'undefined') {
+    try {
+      const streamUrl = `/api/simulation/${props.simulationId}/stream`
+      sseSource = new EventSource(streamUrl)
+
+      sseSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data)
+          if (!data) return
+          handleSimulationStateUpdate(data)
+        } catch (e) {
+          console.warn('Failed to parse simulation SSE event:', e)
+        }
+      }
+
+      sseSource.onerror = (err) => {
+        console.warn('Simulation SSE stream error, falling back to polling:', err)
+        if (sseSource) {
+          sseSource.close()
+          sseSource = null
+        }
+        startStatusPolling()
+        startDetailPolling()
+      }
+      return
+    } catch (e) {
+      console.warn('EventSource initialization failed, using polling:', e)
+    }
+  }
+
+  // Fallback to polling
+  startStatusPolling()
+  startDetailPolling()
+}
 
 const startStatusPolling = () => {
+  if (statusTimer) return
   statusTimer = setInterval(fetchRunStatus, 2000)
 }
 
 const startDetailPolling = () => {
+  if (detailTimer) return
   detailTimer = setInterval(fetchRunStatusDetail, 3000)
 }
 
 const stopPolling = () => {
+  if (sseSource) {
+    sseSource.close()
+    sseSource = null
+  }
   if (statusTimer) {
     clearInterval(statusTimer)
     statusTimer = null
@@ -485,6 +534,55 @@ const stopPolling = () => {
 // Track previous rounds for each platform to detect changes and output logs
 const prevTwitterRound = ref(0)
 const prevRedditRound = ref(0)
+
+const handleSimulationStateUpdate = (data) => {
+  runStatus.value = data
+
+  // Detect round changes for each platform and output logs
+  if (data.twitter_current_round > prevTwitterRound.value) {
+    addLog(`[Info Plaza] R${data.twitter_current_round}/${data.total_rounds} | T:${data.twitter_simulated_hours || 0}h | A:${data.twitter_actions_count}`)
+    prevTwitterRound.value = data.twitter_current_round
+  }
+
+  if (data.reddit_current_round > prevRedditRound.value) {
+    addLog(`[Topic Community] R${data.reddit_current_round}/${data.total_rounds} | T:${data.reddit_simulated_hours || 0}h | A:${data.reddit_actions_count}`)
+    prevRedditRound.value = data.reddit_current_round
+  }
+
+  // Update actions if recent_actions present in stream
+  if (Array.isArray(data.recent_actions) && data.recent_actions.length > 0) {
+    data.recent_actions.forEach(action => {
+      const uniqueId = `${action.round_num}_${action.timestamp}_${action.agent_id}_${action.action_type}`
+      if (!actionIds.has(uniqueId)) {
+        actionIds.add(uniqueId)
+        actions.value.unshift(action)
+        if (actions.value.length > 200) {
+          actions.value.pop()
+        }
+      }
+    })
+  }
+
+  // Check completion
+  const isCompleted = data.runner_status === 'completed' || data.runner_status === 'stopped'
+  const isFailed = data.runner_status === 'failed'
+  const platformsCompleted = checkPlatformsCompleted(data)
+
+  if (isFailed) {
+    addLog('✗ Simulation failed' + (data.error ? `: ${data.error}` : ''))
+    phase.value = 2
+    stopPolling()
+    emit('update-status', 'error')
+  } else if (isCompleted || platformsCompleted) {
+    if (platformsCompleted && !isCompleted) {
+      addLog('✓ Detected all platform simulations have ended')
+    }
+    addLog('✓ Simulation completed')
+    phase.value = 2
+    stopPolling()
+    emit('update-status', 'completed')
+  }
+}
 
 const fetchRunStatus = async () => {
   if (!props.simulationId) return

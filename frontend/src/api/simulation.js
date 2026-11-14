@@ -103,6 +103,14 @@ export const getRunStatus = (simulationId) => {
 }
 
 /**
+ * Get simulation real-time SSE stream URL
+ * @param {string} simulationId
+ */
+export const getSimulationStreamUrl = (simulationId) => {
+  return `/api/simulation/${simulationId}/stream`
+}
+
+/**
  * Get simulation detailed run status (including recent actions)
  * @param {string} simulationId
  */
