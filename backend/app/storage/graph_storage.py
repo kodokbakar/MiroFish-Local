@@ -146,7 +146,9 @@ class GraphStorage(ABC):
         """Get graph metadata (node count, edge count, entity types)."""
 
     @abstractmethod
-    def get_graph_data(self, graph_id: str) -> Dict[str, Any]:
+    def get_graph_data(
+        self, graph_id: str, include_embeddings: bool = False
+    ) -> Dict[str, Any]:
         """
         Get full graph data (enriched format for frontend).
 
