@@ -157,7 +157,9 @@ class GraphStorage(ABC):
         """Get graph metadata (node count, edge count, entity types)."""
 
     @abstractmethod
-    def get_graph_data(self, graph_id: str) -> Dict[str, Any]:
+    def get_graph_data(
+        self, graph_id: str, include_embeddings: bool = False
+    ) -> Dict[str, Any]:
         """
         Get full graph data (enriched format for frontend).
 
@@ -180,4 +182,15 @@ class GraphStorage(ABC):
                 edges_added: list of edge dicts
                 cumulative_nodes: int
                 cumulative_edges: int
+        """
+
+    @abstractmethod
+    def detect_communities(
+        self, graph_id: str, algorithm: str = "louvain"
+    ) -> Dict[str, Any]:
+        """
+        Detect entity communities in graph and persist community_id to nodes.
+
+        Returns summary dict:
+            {"communities": [...], "total_communities": N, "total_nodes": M}
         """

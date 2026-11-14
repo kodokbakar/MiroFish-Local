@@ -5,13 +5,18 @@ from typing import Any, Dict, List
 
 
 def node_to_dict(node: Any, labels: List[str]) -> Dict[str, Any]:
-    props = dict(node)
+    if isinstance(node, dict):
+        props = dict(node)
+    elif hasattr(node, "items"):
+        props = dict(node.items())
+    else:
+        props = dict(node)
     attrs_json = props.pop("attributes_json", "{}")
     try:
         attributes = json.loads(attrs_json) if attrs_json else {}
     except (json.JSONDecodeError, TypeError):
         attributes = {}
-    return {
+    res = {
         "uuid": props.get("uuid", ""),
         "name": props.get("name", ""),
         "labels": [label for label in labels if label != "Entity"] if labels else [],
@@ -21,12 +26,20 @@ def node_to_dict(node: Any, labels: List[str]) -> Dict[str, Any]:
         "created_round": props.get("created_round", 0),
         "simulation_id": props.get("simulation_id"),
     }
+    if "community_id" in props and props["community_id"] is not None:
+        res["community_id"] = props["community_id"]
+    return res
 
 
 def edge_to_dict(
     rel: Any, source_uuid: str, target_uuid: str
 ) -> Dict[str, Any]:
-    props = dict(rel)
+    if isinstance(rel, dict):
+        props = dict(rel)
+    elif hasattr(rel, "items"):
+        props = dict(rel.items())
+    else:
+        props = dict(rel)
     attrs_json = props.pop("attributes_json", "{}")
     try:
         attributes = json.loads(attrs_json) if attrs_json else {}

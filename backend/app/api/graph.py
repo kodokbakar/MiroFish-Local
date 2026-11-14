@@ -638,9 +638,10 @@ def get_graph_data(graph_id: str):
     Get graph data (nodes and edges)
     """
     try:
+        include_embeddings = request.args.get('include_embeddings', 'false').lower() in ('true', '1', 'yes')
         storage = _get_storage()
         builder = GraphBuilderService(storage=storage)
-        graph_data = builder.get_graph_data(graph_id)
+        graph_data = builder.get_graph_data(graph_id, include_embeddings=include_embeddings)
 
         return jsonify({
             "success": True,
@@ -673,6 +674,28 @@ def delete_graph(graph_id: str):
     except Exception as e:
         return jsonify({
             "success": False,
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
+
+
+@graph_bp.route('/<graph_id>/communities', methods=['POST'])
+@graph_bp.route('/communities/<graph_id>', methods=['POST'])
+def detect_communities(graph_id: str):
+    """
+    Detect communities in the graph and persist community_id to nodes.
+    """
+    try:
+        storage = _get_storage()
+        summary = storage.detect_communities(graph_id)
+        return jsonify({
+            "code": 0,
+            "message": "success",
+            "data": summary
+        })
+    except Exception as e:
+        return jsonify({
+            "code": 1,
             "error": str(e),
             "traceback": traceback.format_exc()
         }), 500
