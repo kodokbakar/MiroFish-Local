@@ -238,3 +238,170 @@ class TestCommunityDetection:
         assert data["data"]["total_communities"] == 1
         assert data["data"]["total_nodes"] == 2
         mock_storage.detect_communities.assert_called_once_with("graph-xyz")
+
+    def test_self_loops_handling(self):
+        """Edge case: self-loop edges should not crash Louvain or cause errors."""
+        fake_driver = MagicMock()
+        mock_session = MagicMock()
+        fake_driver.session.return_value.__enter__.return_value = mock_session
+
+        nodes = [
+            {"uuid": "s1", "name": "SelfNode", "labels": ["Entity", "Concept"]},
+            {"uuid": "s2", "name": "Neighbor", "labels": ["Entity", "Concept"]},
+        ]
+        edges = [
+            {"source": "s1", "target": "s1", "weight": 1.0},
+            {"source": "s1", "target": "s2", "weight": 2.0},
+        ]
+
+        def mock_execute_read(fn, *args, **kwargs):
+            mock_tx = MagicMock()
+            def mock_run(query, **params):
+                if "SHOW PROCEDURES" in query:
+                    return FakeResult([])
+                if "MATCH (n:Entity {graph_id: $gid})" in query:
+                    return FakeResult(nodes)
+                if "MATCH (src:Entity)-[r:RELATION" in query:
+                    return FakeResult(edges)
+                return FakeResult([])
+            mock_tx.run = mock_run
+            return fn(mock_tx, *args, **kwargs)
+
+        mock_session.execute_read = mock_execute_read
+        mock_session.execute_write = lambda fn, *a, **kw: fn(MagicMock(), *a, **kw)
+
+        with patch("app.storage.neo4j_storage.GraphDatabase.driver", return_value=fake_driver):
+            storage = Neo4jStorage(
+                uri="bolt://localhost:7687",
+                user="neo4j",
+                password="password",
+                embedding_service=MagicMock(),
+                ner_extractor=MagicMock(),
+            )
+            summary = storage.detect_communities("self-loop-graph")
+
+        assert summary["total_nodes"] == 2
+        assert summary["total_communities"] >= 1
+        assert sum(c["size"] for c in summary["communities"]) == 2
+
+    def test_multiple_disconnected_components_various_sizes(self):
+        """Edge case: multiple components of different sizes (e.g. triangle, pair, isolated node)."""
+        fake_driver = MagicMock()
+        mock_session = MagicMock()
+        fake_driver.session.return_value.__enter__.return_value = mock_session
+
+        nodes = [
+            {"uuid": f"t{i}", "name": f"Triangle{i}", "labels": ["Entity", "TypeA"]} for i in range(3)
+        ] + [
+            {"uuid": f"p{i}", "name": f"Pair{i}", "labels": ["Entity", "TypeB"]} for i in range(2)
+        ] + [
+            {"uuid": "iso1", "name": "Isolated", "labels": ["Entity", "TypeC"]}
+        ]
+
+        edges = [
+            {"source": "t0", "target": "t1", "weight": 1.0},
+            {"source": "t1", "target": "t2", "weight": 1.0},
+            {"source": "t2", "target": "t0", "weight": 1.0},
+            {"source": "p0", "target": "p1", "weight": 1.0},
+        ]
+
+        def mock_execute_read(fn, *args, **kwargs):
+            mock_tx = MagicMock()
+            def mock_run(query, **params):
+                if "SHOW PROCEDURES" in query:
+                    return FakeResult([])
+                if "MATCH (n:Entity {graph_id: $gid})" in query:
+                    return FakeResult(nodes)
+                if "MATCH (src:Entity)-[r:RELATION" in query:
+                    return FakeResult(edges)
+                return FakeResult([])
+            mock_tx.run = mock_run
+            return fn(mock_tx, *args, **kwargs)
+
+        mock_session.execute_read = mock_execute_read
+        mock_session.execute_write = lambda fn, *a, **kw: fn(MagicMock(), *a, **kw)
+
+        with patch("app.storage.neo4j_storage.GraphDatabase.driver", return_value=fake_driver):
+            storage = Neo4jStorage(
+                uri="bolt://localhost:7687",
+                user="neo4j",
+                password="password",
+                embedding_service=MagicMock(),
+                ner_extractor=MagicMock(),
+            )
+            summary = storage.detect_communities("multi-comp-graph")
+
+        assert summary["total_nodes"] == 6
+        assert summary["total_communities"] == 3
+        sizes = [c["size"] for c in summary["communities"]]
+        assert sizes == [3, 2, 1]
+
+    def test_nonexistent_graph_id_returns_empty_summary(self, app):
+        """Edge case: non-existent graph_id returns empty community summary without 500 error."""
+        mock_storage = MagicMock()
+        mock_storage.detect_communities.return_value = {
+            "communities": [],
+            "total_communities": 0,
+            "total_nodes": 0,
+        }
+
+        with patch("app.api.graph._get_storage", return_value=mock_storage):
+            client = app.test_client()
+            res = client.post("/api/graph/non-existent-graph/communities")
+
+        assert res.status_code == 200
+        data = res.get_json()
+        assert data["code"] == 0
+        assert data["message"] == "success"
+        assert data["data"] == {
+            "communities": [],
+            "total_communities": 0,
+            "total_nodes": 0,
+        }
+
+    def test_weights_edge_cases(self):
+        """Edge case: large weights, negative weights, and None/missing weights."""
+        fake_driver = MagicMock()
+        mock_session = MagicMock()
+        fake_driver.session.return_value.__enter__.return_value = mock_session
+
+        nodes = [
+            {"uuid": "w1", "name": "Node1", "labels": ["Entity", "Item"]},
+            {"uuid": "w2", "name": "Node2", "labels": ["Entity", "Item"]},
+            {"uuid": "w3", "name": "Node3", "labels": ["Entity", "Item"]},
+        ]
+        # Cypher returns records; some have weight=None, large weight, or negative weight
+        raw_edges = [
+            {"source": "w1", "target": "w2", "weight": 1000000.0},
+            {"source": "w2", "target": "w3", "weight": None},
+            {"source": "w1", "target": "w3", "weight": -5.0},
+        ]
+
+        def mock_execute_read(fn, *args, **kwargs):
+            mock_tx = MagicMock()
+            def mock_run(query, **params):
+                if "SHOW PROCEDURES" in query:
+                    return FakeResult([])
+                if "MATCH (n:Entity {graph_id: $gid})" in query:
+                    return FakeResult(nodes)
+                if "MATCH (src:Entity)-[r:RELATION" in query:
+                    return FakeResult(raw_edges)
+                return FakeResult([])
+            mock_tx.run = mock_run
+            return fn(mock_tx, *args, **kwargs)
+
+        mock_session.execute_read = mock_execute_read
+        mock_session.execute_write = lambda fn, *a, **kw: fn(MagicMock(), *a, **kw)
+
+        with patch("app.storage.neo4j_storage.GraphDatabase.driver", return_value=fake_driver):
+            storage = Neo4jStorage(
+                uri="bolt://localhost:7687",
+                user="neo4j",
+                password="password",
+                embedding_service=MagicMock(),
+                ner_extractor=MagicMock(),
+            )
+            summary = storage.detect_communities("weights-graph")
+
+        assert summary["total_nodes"] == 3
+        assert summary["total_communities"] >= 1
