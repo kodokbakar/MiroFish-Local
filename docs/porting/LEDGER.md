@@ -80,6 +80,10 @@ Only the orchestrator edits this file.
 | 061 | - | Issue #82: Bolt payload projection to prune raw vector embeddings on visual graph queries | perf | adapt | low | ported | PR #86 (`3f1ce6c`) | Project explicit properties in get_graph_data to omit n.embedding over Bolt protocol; reviewer APPROVE, tester PASS, 879 backend tests pass. |
 | 062 | - | Issue #83: community detection to auto-identify entity clusters in Neo4j graph | feature | adapt | medium | ported | PR #87 (`d190652`) | Louvain community detection with NetworkX fallback, community_id persistence, and D3 cluster coloring; reviewer APPROVE, tester PASS, 9 backend tests pass. |
 | 063 | - | Issue #84: temporal graph evolution tracking across simulation rounds | feature | adapt | medium | ported | PR #88 (`bce51cf`) | Round-scoped graph mutation tagging and timeline playback API/visualizer; reviewer APPROVE, tester PASS, 8 backend tests pass. |
+| 064 | - | Issue #31: missing simulationId prop and unrendered steps 3-5 in MainView component | bugfix | direct | low | pending | `port/064` | Provide simulationId and render remaining steps or clean routing in MainView. |
+| 065 | - | Issue #33: stale env_status.json without OS process check blocks interview endpoints | bugfix | direct | low | pending | `port/065` | Check OS process alive alongside env_status.json in check_env_alive to prevent WSGI hang. |
+| 066 | - | Issue #89: sanitize path identifiers to prevent arbitrary directory deletion and path traversal | bugfix | direct | medium | pending | `port/066` | Sanitize entity identifiers and verify realpath within base directory before filesystem operations. |
+| 067 | - | Issue #90: restrict CORS wildcard and require origin verification on API endpoints | bugfix | direct | low | pending | `port/067` | Restrict CORS wildcard, add origin verification, and default Flask host to 127.0.0.1. |
 
 ## Skipped (with reason)
 | Upstream commit | Reason |
