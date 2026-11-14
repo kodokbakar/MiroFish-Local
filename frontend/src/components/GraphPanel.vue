@@ -271,22 +271,37 @@
       </div>
     </div>
     
+    <!-- Timeline scrubber toolbar when rounds exist -->
+    <div v-if="graphData && maxRound > 0" class="graph-timeline-scrubber">
+      <div class="timeline-scrubber-header">
+        <span class="scrubber-label">Timeline: Round {{ selectedRound }} of {{ maxRound }}</span>
+        <button v-if="selectedRound < maxRound" class="reset-round-btn" @click="selectedRound = maxRound">Show All</button>
+      </div>
+      <input
+        type="range"
+        min="0"
+        :max="maxRound"
+        v-model.number="selectedRound"
+        class="timeline-slider"
+      />
+    </div>
+
     <!-- Bottom Controls (Bottom Right / Controls Area) -->
     <div v-if="graphData" class="graph-bottom-controls">
       <!-- Color By Toggle -->
       <div class="color-by-toggle">
         <span class="control-label">Color by:</span>
         <div class="toggle-buttons">
-          <button 
-            class="toggle-btn" 
-            :class="{ active: colorBy === 'type' }" 
+          <button
+            class="toggle-btn"
+            :class="{ active: colorBy === 'type' }"
             @click="colorBy = 'type'"
           >
             Entity Type
           </button>
-          <button 
-            class="toggle-btn" 
-            :class="{ active: colorBy === 'community' }" 
+          <button
+            class="toggle-btn"
+            :class="{ active: colorBy === 'community' }"
             @click="colorBy = 'community'"
           >
             Community
@@ -336,6 +351,28 @@ const expandedSelfLoops = ref(new Set()) // Expanded self-loop items
 const showSimulationFinishedHint = ref(false) // Simulation finished hint
 const wasSimulating = ref(false) // Track whether was simulating before
 
+const selectedRound = ref(0)
+const maxRound = computed(() => {
+  if (!props.graphData) return 0
+  let maxR = 0
+  if (props.graphData.nodes) {
+    props.graphData.nodes.forEach(n => {
+      if (n.created_round && n.created_round > maxR) maxR = n.created_round
+    })
+  }
+  if (props.graphData.edges) {
+    props.graphData.edges.forEach(e => {
+      if (e.created_round && e.created_round > maxR) maxR = e.created_round
+    })
+  }
+  return maxR
+})
+
+// Auto-advance selectedRound when maxRound increases
+watch(maxRound, (newMax) => {
+  selectedRound.value = newMax
+}, { immediate: true })
+
 // LOD & Rendering Cap state
 const nodeCap = ref(300)
 const capOptions = [
@@ -356,8 +393,15 @@ const setNodeCap = (val) => {
 }
 
 const lodResult = computed(() => {
-  const nodes = props.graphData?.nodes || []
-  const edges = props.graphData?.edges || []
+  const rawNodes = props.graphData?.nodes || []
+  const rawEdges = props.graphData?.edges || []
+  const nodes = maxRound.value > 0
+    ? rawNodes.filter(n => (n.created_round ?? 0) <= selectedRound.value)
+    : rawNodes
+  const edges = maxRound.value > 0
+    ? rawEdges.filter(e => (e.created_round ?? 0) <= selectedRound.value)
+    : rawEdges
+
   return filterVisibleGraph({
     nodes,
     edges,
@@ -367,7 +411,10 @@ const lodResult = computed(() => {
 })
 
 const searchResults = computed(() => {
-  const nodes = props.graphData?.nodes || []
+  const rawNodes = props.graphData?.nodes || []
+  const nodes = maxRound.value > 0
+    ? rawNodes.filter(n => (n.created_round ?? 0) <= selectedRound.value)
+    : rawNodes
   const visibleIds = (lodResult.value?.visibleNodes || []).map(n => n.uuid)
   return searchOffscreenNodes(nodes, visibleIds, searchQuery.value)
 })
@@ -1006,7 +1053,7 @@ watch(() => props.graphData, () => {
   nextTick(renderGraph)
 }, { deep: true })
 
-watch(colorBy, () => {
+watch([selectedRound, colorBy], () => {
   nextTick(renderGraph)
 })
 
@@ -1825,5 +1872,51 @@ input:checked + .slider:before {
 .episode-tag.small {
   padding: 3px 6px;
   font-size: 9px;
+}
+
+/* Timeline scrubber */
+.graph-timeline-scrubber {
+  position: absolute;
+  bottom: 50px;
+  right: 20px;
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid #E0E0E0;
+  border-radius: 8px;
+  padding: 8px 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  z-index: 10;
+  min-width: 180px;
+}
+
+.timeline-scrubber-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.scrubber-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #333;
+}
+
+.reset-round-btn {
+  background: none;
+  border: none;
+  color: #7B2D8E;
+  font-size: 10px;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.reset-round-btn:hover {
+  text-decoration: underline;
+}
+
+.timeline-slider {
+  width: 100%;
+  accent-color: #7B2D8E;
+  cursor: pointer;
 }
 </style>

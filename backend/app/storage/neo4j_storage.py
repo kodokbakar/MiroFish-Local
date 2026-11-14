@@ -288,12 +288,22 @@ class Neo4jStorage(GraphStorage):
         graph_id: str,
         text: str,
         ontology: Optional[Dict[str, Any]] = None,
+        simulation_id: Optional[str] = None,
+        round_num: int = 0,
     ) -> str:
         """Process text: NER/RE → batch embed → create nodes/edges → return episode_id."""
         if ontology is None:
             ontology = self.get_ontology(graph_id)
         extraction = self.extract_text(text, ontology)
-        return self.persist_extraction(graph_id, text, extraction)
+        if simulation_id is None and round_num == 0:
+            return self.persist_extraction(graph_id, text, extraction)
+        return self.persist_extraction(
+            graph_id,
+            text,
+            extraction,
+            simulation_id=simulation_id,
+            round_num=round_num,
+        )
 
     def extract_text(self, text: str, ontology: Dict[str, Any]) -> Dict[str, Any]:
         """Extract without touching Neo4j, so calls can overlap safely."""
@@ -307,7 +317,12 @@ class Neo4jStorage(GraphStorage):
         return extraction
 
     def persist_extraction(
-        self, graph_id: str, text: str, extraction: Dict[str, Any]
+        self,
+        graph_id: str,
+        text: str,
+        extraction: Dict[str, Any],
+        simulation_id: Optional[str] = None,
+        round_num: int = 0,
     ) -> str:
         """Embed and write one successful extraction in a single graph transaction."""
         if (
@@ -462,7 +477,9 @@ class Neo4jStorage(GraphStorage):
                             n.summary = e.summary,
                             n.attributes_json = e.attrs_json,
                             n.embedding = e.embedding,
-                            n.created_at = $now
+                            n.created_at = $now,
+                            n.simulation_id = $simulation_id,
+                            n.created_round = $round_num
                         ON MATCH SET
                             n.summary = CASE WHEN n.summary = '' OR n.summary IS NULL
                                 THEN e.summary ELSE n.summary END,
@@ -473,6 +490,8 @@ class Neo4jStorage(GraphStorage):
                         gid=graph_id,
                         entities=entities_data,
                         now=now,
+                        simulation_id=simulation_id,
+                        round_num=round_num,
                     )
                     if res:
                         for rec in res:
@@ -581,7 +600,9 @@ class Neo4jStorage(GraphStorage):
                                 r.created_at = $now,
                                 r.valid_at = null,
                                 r.invalid_at = null,
-                                r.expired_at = null
+                                r.expired_at = null,
+                                r.simulation_id = $simulation_id,
+                                r.created_round = $round_num
                             ON MATCH SET
                                 r.episode_ids = CASE
                                     WHEN r.episode_ids IS NULL THEN [$episode_id]
@@ -601,6 +622,8 @@ class Neo4jStorage(GraphStorage):
                             relations=prepared_relations,
                             episode_id=episode_id,
                             now=now,
+                            simulation_id=simulation_id,
+                            round_num=round_num,
                         )
 
             self._call_with_retry(session.execute_write, _persist_chunk)
@@ -612,7 +635,11 @@ class Neo4jStorage(GraphStorage):
         return episode_id
 
     def persist_structured_activities(
-        self, graph_id: str, activities: List[Any]
+        self,
+        graph_id: str,
+        activities: List[Any],
+        simulation_id: Optional[str] = None,
+        round_num: int = 0,
     ) -> str:
         """
         Fast-path graph ingestion for structured social actions.
@@ -624,6 +651,20 @@ class Neo4jStorage(GraphStorage):
 
         episode_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
+
+        # If simulation_id or round_num are not provided as arguments, try extracting from activities
+        if simulation_id is None:
+            for act in activities:
+                s = getattr(act, "simulation_id", None) if not isinstance(act, dict) else act.get("simulation_id")
+                if s:
+                    simulation_id = s
+                    break
+        if round_num == 0:
+            for act in activities:
+                r = getattr(act, "round_num", None) if not isinstance(act, dict) else act.get("round_num")
+                if r:
+                    round_num = r
+                    break
 
         # Build structured entities and relations directly
         entities_dict: Dict[str, Dict[str, Any]] = {}
@@ -726,12 +767,16 @@ class Neo4jStorage(GraphStorage):
                             n.name = e.name,
                             n.summary = e.summary,
                             n.attributes_json = '{}',
-                            n.created_at = $now
+                            n.created_at = $now,
+                            n.simulation_id = $simulation_id,
+                            n.created_round = $round_num
                         SET n:Person
                         """,
                         gid=graph_id,
                         entities=entities_data,
                         now=now,
+                        simulation_id=simulation_id,
+                        round_num=round_num,
                     )
 
                 # 3. Merge relations
@@ -746,7 +791,9 @@ class Neo4jStorage(GraphStorage):
                             rel.uuid = r.uuid,
                             rel.fact = r.fact,
                             rel.episode_ids = [$episode_id],
-                            rel.created_at = $now
+                            rel.created_at = $now,
+                            rel.simulation_id = $simulation_id,
+                            rel.created_round = $round_num
                         ON MATCH SET
                             rel.episode_ids = CASE
                                 WHEN rel.episode_ids IS NULL THEN [$episode_id]
@@ -758,6 +805,8 @@ class Neo4jStorage(GraphStorage):
                         relations=relations_list,
                         episode_id=episode_id,
                         now=now,
+                        simulation_id=simulation_id,
+                        round_num=round_num,
                     )
 
             self._call_with_retry(session.execute_write, _write_activities)
@@ -1084,6 +1133,97 @@ class Neo4jStorage(GraphStorage):
                 "edges": edges,
                 "node_count": len(nodes),
                 "edge_count": len(edges),
+            }
+
+        with self._driver.session() as session:
+            return self._call_with_retry(session.execute_read, _read)
+
+    def get_graph_timeline(
+        self, simulation_id: str, graph_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Get graph evolution timeline grouped by simulation round.
+        Returns dict with:
+            simulation_id: str
+            rounds: list of dicts with:
+                round: int
+                nodes_added: list of node dicts
+                edges_added: list of edge dicts
+                cumulative_nodes: int
+                cumulative_edges: int
+        """
+        def _read(tx):
+            if graph_id:
+                node_query = """
+                MATCH (n:Entity {graph_id: $gid})
+                WHERE n.simulation_id = $sim_id OR n.created_round = 0 OR n.simulation_id IS NULL
+                RETURN n, labels(n) AS labels
+                """
+                edge_query = """
+                MATCH (src:Entity)-[r:RELATION {graph_id: $gid}]->(tgt:Entity)
+                WHERE r.simulation_id = $sim_id OR r.created_round = 0 OR r.simulation_id IS NULL
+                RETURN r, src.uuid AS src_uuid, tgt.uuid AS tgt_uuid,
+                       src.name AS src_name, tgt.name AS tgt_name
+                """
+            else:
+                node_query = """
+                MATCH (n:Entity)
+                WHERE n.simulation_id = $sim_id
+                RETURN n, labels(n) AS labels
+                """
+                edge_query = """
+                MATCH (src:Entity)-[r:RELATION]->(tgt:Entity)
+                WHERE r.simulation_id = $sim_id
+                RETURN r, src.uuid AS src_uuid, tgt.uuid AS tgt_uuid,
+                       src.name AS src_name, tgt.name AS tgt_name
+                """
+
+            node_result = tx.run(node_query, gid=graph_id, sim_id=simulation_id)
+            nodes_by_round: Dict[int, List[Dict[str, Any]]] = {}
+            seen_nodes: set = set()
+            for record in node_result:
+                nd = self._node_to_dict(record["n"], record["labels"])
+                if nd["uuid"] in seen_nodes:
+                    continue
+                seen_nodes.add(nd["uuid"])
+                r_num = nd.get("created_round") or 0
+                nodes_by_round.setdefault(r_num, []).append(nd)
+
+            edge_result = tx.run(edge_query, gid=graph_id, sim_id=simulation_id)
+            edges_by_round: Dict[int, List[Dict[str, Any]]] = {}
+            seen_edges: set = set()
+            for record in edge_result:
+                ed = self._edge_to_dict(record["r"], record["src_uuid"], record["tgt_uuid"])
+                if ed["uuid"] in seen_edges:
+                    continue
+                seen_edges.add(ed["uuid"])
+                ed["fact_type"] = ed["name"]
+                ed["source_node_name"] = record["src_name"] or ""
+                ed["target_node_name"] = record["tgt_name"] or ""
+                ed["episodes"] = ed.get("episode_ids", [])
+                r_num = ed.get("created_round") or 0
+                edges_by_round.setdefault(r_num, []).append(ed)
+
+            all_rounds = sorted(set(nodes_by_round.keys()) | set(edges_by_round.keys()) | {0})
+            rounds_list = []
+            cum_nodes = 0
+            cum_edges = 0
+            for r in all_rounds:
+                n_added = nodes_by_round.get(r, [])
+                e_added = edges_by_round.get(r, [])
+                cum_nodes += len(n_added)
+                cum_edges += len(e_added)
+                rounds_list.append({
+                    "round": r,
+                    "nodes_added": n_added,
+                    "edges_added": e_added,
+                    "cumulative_nodes": cum_nodes,
+                    "cumulative_edges": cum_edges,
+                })
+
+            return {
+                "simulation_id": simulation_id,
+                "rounds": rounds_list,
             }
 
         with self._driver.session() as session:
