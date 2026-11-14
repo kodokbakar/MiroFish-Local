@@ -1,12 +1,22 @@
 # MiroFish-Local Roadmap
 
-## Current State (v0.5.0)
+## Current State (v0.7.0)
 
 **MiroFish-Local** is a local-first, vendor-independent multi-agent simulation and GraphRAG engine.
 Forked from [nikmcfly/MiroFish-Offline](https://github.com/nikmcfly/MiroFish-Offline) (which originated from [666ghj/MiroFish](https://github.com/666ghj/MiroFish)), this repository completely removes external cloud dependencies (Zep Cloud, DashScope) in favor of a local Neo4j 5.15+ Community Edition database behind an abstract `GraphStorage` layer and flexible OpenAI-compatible LLM endpoints (Ollama, vLLM, llama.cpp, Claude, OpenAI).
 
-### v0.5.0 Key Capabilities
+### v0.7.0 Key Capabilities
 - **Engine**: 100% offline-capable, runs on Python 3.12+ with Flask and Neo4j CE.
+- **Graph Visualization & Scale**:
+  - D3 Level of Detail (LOD) and connection-degree node rendering cap (top 100/300/500/All) with off-screen entity search and injection to maintain 60 FPS viewport rendering (#81).
+  - Bolt payload map projection prunes raw 1536-dim vector embeddings during visual queries, slashing network and memory footprint (#82).
+- **Graph Intelligence & Clustering**:
+  - Automated Louvain community detection (with GDS procedure and pure in-memory NetworkX fallback) to partition entities into thematic clusters with D3 palette mapping (#83).
+  - Temporal graph evolution tracking across simulation rounds with interactive frontend scrubber playback (#84).
+- **Simulation Execution & Streaming**:
+  - Real-time Server-Sent Events (SSE) streaming endpoint (`/api/simulation/<id>/stream`) replacing frontend polling timers (#75).
+  - Subprocess group isolation (`start_new_session=True` / `os.killpg`) to guarantee zero orphan OASIS processes (#76).
+  - Customizable `AgentArchetype` definitions and ratio sampling for diverse agent behaviors (#77).
 - **Staged Multi-Model Routing**:
   - Task-based model router assigning dedicated models per pipeline stage (`LLM_MODEL_NER`, `LLM_MODEL_REPORT`, `LLM_MODEL_SIMULATION`) with automatic fallback to `LLM_MODEL_NAME`.
 - **Infrastructure Telemetry**:
@@ -25,7 +35,7 @@ Forked from [nikmcfly/MiroFish-Offline](https://github.com/nikmcfly/MiroFish-Off
   - Table-aware parsing and chunking for CSV and JSON datasets.
   - Local atomic caching for successful NER extraction to avoid redundant LLM calls across builds.
   - Parallel bounded NER extraction (1–4 worker threads) with ordered serial persistence.
-- **Quality & Verification**: 863 automated tests passing offline across backend storage, ingestion, simulation, and report generation.
+- **Quality & Verification**: 879+ backend tests and 20 frontend tests passing offline across storage, clustering, simulation, and report generation.
 
 ---
 
@@ -65,33 +75,43 @@ Forked from [nikmcfly/MiroFish-Offline](https://github.com/nikmcfly/MiroFish-Off
 - [x] Telemetry & health endpoint `/api/status` (Neo4j connection, LLM endpoint availability, disk storage) (#70)
 - [x] Bypass LLM NER for structured social actions (Fast-Path Ingestion via Cypher UNWIND MERGE) (#71)
 
+### v0.6.0 — Enhanced Simulation & Real-time Streaming
+- [x] Real-time simulation stream via SSE (`/api/simulation/<id>/stream`) replacing polling timers (#75)
+- [x] Agent memory persistence across simulation rounds directly to Neo4j.
+- [x] Process Group isolation (`start_new_session=True` / `os.killpg`) to guarantee full termination of child OASIS subprocesses (#76)
+- [x] Export simulation transcripts as structured JSON.
+- [x] Custom agent archetypes: define personality templates beyond OASIS defaults (#77)
+
+### v0.7.0 — Graph Intelligence & Visual Scale
+- [x] Visual level-of-detail and node rendering cap (top 100/300/500/All) in D3 to prevent browser main-thread freeze (#81).
+- [x] Graph visualization improvements: force-directed layout, filtering by entity type, dynamic color palette.
+- [x] Bolt payload projection: prune raw 1536-dim vector transfer on visual graph queries (#82).
+- [x] Community detection (Louvain) to auto-identify entity clusters with NetworkX fallback (#83).
+- [x] Temporal graph evolution tracking across simulation rounds with interactive playback scrubber (#84).
+
 ---
 
 ## Upcoming Milestones
 
-### v0.6.0 — Enhanced Simulation & Real-time Streaming
-- [ ] Real-time simulation stream via SSE/WebSocket to eliminate polling `setInterval` timers in frontend (#75)
-- [x] Agent memory persistence across simulation rounds directly to Neo4j.
-- [ ] Process Group isolation (`start_new_session`) to guarantee full termination of child OASIS subprocesses (#76)
-- [x] Export simulation transcripts as structured JSON.
-- [ ] Custom agent archetypes: define personality templates beyond OASIS defaults (#77)
+### v0.8.0 — Multi-Scenario A/B Testing & Graph Branching
+- [ ] Graph snapshot & branching: instant clone of graph state at round N to test counterfactual hypotheses.
+- [ ] Multi-scenario comparison view: side-by-side visualization of divergence between baseline and counterfactual runs.
+- [ ] Graph export/import (GraphML, JSON-LD, Gephi format) for external graph analytics.
+- [ ] Streaming file reader for large PDF/EPUB/TXT corpus without memory spikes.
 
-### v0.7.0 — Graph Intelligence & Visual Scale
-- [ ] Visual level-of-detail and node rendering cap (top 300 degree nodes) in D3 to prevent browser main-thread freeze.
-- [x] Graph visualization improvements: force-directed layout, filtering by entity type, dynamic color palette.
-- [ ] Bolt payload projection: prune raw 1536-dim vector transfer on visual graph queries.
-- [ ] Community detection (Louvain/Leiden) to auto-identify entity clusters.
-- [ ] Temporal graph evolution tracking across simulation rounds.
+### v0.9.0 — Simulation Realism Metrics & Agent Evaluation
+- [ ] Simulation realism & consensus metrics (clustering coefficient, echo chamber index, polarizations over rounds).
+- [ ] LLM-as-a-judge debiasing metrics for simulation outputs.
+- [ ] Cross-platform information diffusion simulation (multi-channel information flow between platforms).
 
 ---
 
 ## Long Term
 
 ### v1.0.0 — Production Ready
-- [ ] Graph versioning & cloning: instant snapshot/clone for multi-scenario A/B simulations.
 - [ ] Basic API key / Bearer token authentication guard for remote/LAN deployments.
-- [ ] Streaming file reader to prevent memory spikes on large file ingestion.
-- [x] Comprehensive test suite (unit + integration + contract tests passing offline).
+- [ ] Standalone Docker Compose bundle with pre-configured Ollama/Neo4j healthchecks.
+- [x] Comprehensive test suite (879+ backend and 20 frontend tests passing offline).
 - [x] Concurrency and throughput benchmark suite.
 - [ ] Deployment guides for standalone Docker Compose and bare-metal environments.
 
