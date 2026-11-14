@@ -93,11 +93,11 @@ Forked from [nikmcfly/MiroFish-Offline](https://github.com/nikmcfly/MiroFish-Off
 
 ## Upcoming Milestones
 
-### v0.8.0 — Multi-Scenario A/B Testing & Graph Branching
-- [ ] Graph snapshot & branching: instant clone of graph state at round N to test counterfactual hypotheses.
-- [ ] Multi-scenario comparison view: side-by-side visualization of divergence between baseline and counterfactual runs.
-- [ ] Graph export/import (GraphML, JSON-LD, Gephi format) for external graph analytics.
-- [ ] Streaming file reader for large PDF/EPUB/TXT corpus without memory spikes.
+### v0.8.0 — Graph Interoperability, Scaling & Branching
+- [ ] **Graph Interoperability & Export**: Endpoint `GET /api/graph/export/<graph_id>?format=graphml|json` generating standard GraphML (for Gephi/Cytoscape/NetworkX) and JSON formats using Python standard library `xml.etree` with UI download triggers in GraphPanel.
+- [ ] **Memory-Safe Streaming Ingestion**: Generator-based streaming chunker (`stream_chunks`) for large TXT/PDF uploads with page-level PyMuPDF streaming to eliminate RAM memory spikes on low-spec hosts.
+- [ ] **Graph Snapshot & Branching**: Instant clone of graph state at round N to test counterfactual hypotheses.
+- [ ] **Multi-Scenario Comparison View**: Side-by-side visualization of divergence between baseline and counterfactual simulation runs.
 
 ### v0.9.0 — Simulation Realism Metrics & Agent Evaluation
 - [ ] Simulation realism & consensus metrics (clustering coefficient, echo chamber index, polarizations over rounds).
