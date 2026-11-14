@@ -78,7 +78,7 @@ Only the orchestrator edits this file.
 | 059 | - | Issue #77: custom agent archetypes beyond OASIS default personas | feature | direct | low | ported | PR #80 (`38ab692`) | AgentArchetype definitions, ratio allocation, and persona prompt guidance; reviewer APPROVE, tester PASS, 866 tests pass. |
 | 060 | - | Issue #81: visual level-of-detail and node rendering cap in D3 | feature | direct | medium | pending | PR #85 (`port/060`) | Dynamic degree calculation, top-N node rendering cap, zoom-scale LOD, and search node injection; reviewer APPROVE, tester PASS, 20 frontend tests pass. |
 | 061 | - | Issue #82: Bolt payload projection to prune raw vector embeddings on visual graph queries | perf | adapt | low | pending | PR #86 (`port/061`) | Project explicit properties in get_graph_data to omit n.embedding over Bolt protocol; reviewer APPROVE, tester PASS, 879 backend tests pass. |
-| 062 | - | Issue #83: community detection to auto-identify entity clusters in Neo4j graph | feature | adapt | medium | pending | `port/062` | Louvain community detection with NetworkX fallback and frontend cluster coloring. |
+| 062 | - | Issue #83: community detection to auto-identify entity clusters in Neo4j graph | feature | adapt | medium | pending | PR #87 (`port/062`) | Louvain community detection with NetworkX fallback, community_id persistence, and D3 cluster coloring; reviewer APPROVE, tester PASS, 9 backend tests pass. |
 | 063 | - | Issue #84: temporal graph evolution tracking across simulation rounds | feature | adapt | medium | pending | `port/063` | Round-scoped graph mutation tagging and timeline playback API/visualizer. |
 
 ## Skipped (with reason)
