@@ -237,3 +237,207 @@ def test_simulation_graph_timeline_api_endpoint():
     assert data["data"]["simulation_id"] == "sim_xyz"
     assert len(data["data"]["rounds"]) == 2
     mock_storage.get_graph_timeline.assert_called_once_with(simulation_id="sim_xyz", graph_id="g123")
+
+
+def _create_mock_storage():
+    storage = Neo4jStorage.__new__(Neo4jStorage)
+    mock_driver = MagicMock()
+    mock_session = MagicMock()
+    mock_driver.session.return_value.__enter__.return_value = mock_session
+    storage._driver = mock_driver
+    storage._call_with_retry = lambda fn, *args, **kwargs: fn(*args, **kwargs)
+    storage._node_to_dict = Neo4jStorage._node_to_dict
+    storage._edge_to_dict = Neo4jStorage._edge_to_dict
+    return storage, mock_session
+
+
+def test_get_graph_timeline_non_sequential_out_of_order_rounds():
+    """Timeline with non-sequential or out-of-order round numbers is correctly sorted and aggregated."""
+    storage, mock_session = _create_mock_storage()
+
+    def fake_execute_read(tx_fn):
+        mock_tx = MagicMock()
+
+        def mock_run(query, **kwargs):
+            if "RETURN n, labels(n)" in query:
+                # Arriving out of order: round 5, round 2, round 8
+                return [
+                    {
+                        "n": {"uuid": "n5", "name": "E5", "created_round": 5, "simulation_id": "sim_ooo"},
+                        "labels": ["Entity"],
+                    },
+                    {
+                        "n": {"uuid": "n2", "name": "E2", "created_round": 2, "simulation_id": "sim_ooo"},
+                        "labels": ["Entity"],
+                    },
+                    {
+                        "n": {"uuid": "n8", "name": "E8", "created_round": 8, "simulation_id": "sim_ooo"},
+                        "labels": ["Entity"],
+                    },
+                ]
+            else:
+                # Edges arriving out of order: round 5, round 2
+                return [
+                    {
+                        "r": {"uuid": "e5", "name": "REL5", "created_round": 5, "simulation_id": "sim_ooo"},
+                        "src_uuid": "n5",
+                        "tgt_uuid": "n2",
+                        "src_name": "E5",
+                        "tgt_name": "E2",
+                    },
+                    {
+                        "r": {"uuid": "e2", "name": "REL2", "created_round": 2, "simulation_id": "sim_ooo"},
+                        "src_uuid": "n2",
+                        "tgt_uuid": "n5",
+                        "src_name": "E2",
+                        "tgt_name": "E5",
+                    },
+                ]
+
+        mock_tx.run = mock_run
+        return tx_fn(mock_tx)
+
+    mock_session.execute_read = fake_execute_read
+
+    timeline = storage.get_graph_timeline("sim_ooo", graph_id="g_test")
+    assert timeline["simulation_id"] == "sim_ooo"
+    rounds = timeline["rounds"]
+    assert [r["round"] for r in rounds] == [0, 2, 5, 8]
+
+    # Round 0: 0 nodes, 0 edges
+    assert rounds[0]["round"] == 0
+    assert rounds[0]["cumulative_nodes"] == 0
+    assert rounds[0]["cumulative_edges"] == 0
+
+    # Round 2: 1 node, 1 edge
+    assert rounds[1]["round"] == 2
+    assert len(rounds[1]["nodes_added"]) == 1
+    assert len(rounds[1]["edges_added"]) == 1
+    assert rounds[1]["cumulative_nodes"] == 1
+    assert rounds[1]["cumulative_edges"] == 1
+
+    # Round 5: 1 node, 1 edge (cumulative: 2 nodes, 2 edges)
+    assert rounds[2]["round"] == 5
+    assert len(rounds[2]["nodes_added"]) == 1
+    assert len(rounds[2]["edges_added"]) == 1
+    assert rounds[2]["cumulative_nodes"] == 2
+    assert rounds[2]["cumulative_edges"] == 2
+
+    # Round 8: 1 node, 0 edges (cumulative: 3 nodes, 2 edges)
+    assert rounds[3]["round"] == 8
+    assert len(rounds[3]["nodes_added"]) == 1
+    assert len(rounds[3]["edges_added"]) == 0
+    assert rounds[3]["cumulative_nodes"] == 3
+    assert rounds[3]["cumulative_edges"] == 2
+
+
+def test_get_graph_timeline_nonexistent_simulation_id():
+    """Timeline query for a non-existent simulation_id returns empty round 0 with 0 counts."""
+    storage, mock_session = _create_mock_storage()
+
+    def fake_execute_read(tx_fn):
+        mock_tx = MagicMock()
+        mock_tx.run.return_value = []
+        return tx_fn(mock_tx)
+
+    mock_session.execute_read = fake_execute_read
+
+    timeline = storage.get_graph_timeline("sim_nonexistent", graph_id="g_none")
+    assert timeline["simulation_id"] == "sim_nonexistent"
+    assert len(timeline["rounds"]) == 1
+    r0 = timeline["rounds"][0]
+    assert r0["round"] == 0
+    assert r0["nodes_added"] == []
+    assert r0["edges_added"] == []
+    assert r0["cumulative_nodes"] == 0
+    assert r0["cumulative_edges"] == 0
+
+
+def test_get_graph_timeline_mixed_baseline_and_multiround_mutations():
+    """Graph with baseline nodes (round 0) and multi-round simulation mutations tracks cumulative states."""
+    storage, mock_session = _create_mock_storage()
+
+    def fake_execute_read(tx_fn):
+        mock_tx = MagicMock()
+
+        def mock_run(query, **kwargs):
+            if "RETURN n, labels(n)" in query:
+                return [
+                    # Baseline nodes (round 0, no simulation_id)
+                    {
+                        "n": {"uuid": "base_doc", "name": "TopicDoc", "created_round": 0, "simulation_id": None},
+                        "labels": ["Entity", "Document"],
+                    },
+                    {
+                        "n": {"uuid": "base_agent", "name": "AgentA", "created_round": 0, "simulation_id": None},
+                        "labels": ["Entity", "Person"],
+                    },
+                    # Round 1 simulation mutation
+                    {
+                        "n": {"uuid": "post_1", "name": "Post1", "created_round": 1, "simulation_id": "sim_mixed"},
+                        "labels": ["Entity", "Post"],
+                    },
+                    # Round 2 simulation mutation
+                    {
+                        "n": {"uuid": "agent_b", "name": "AgentB", "created_round": 2, "simulation_id": "sim_mixed"},
+                        "labels": ["Entity", "Person"],
+                    },
+                ]
+            else:
+                return [
+                    # Baseline edge (round 0)
+                    {
+                        "r": {"uuid": "e_base", "name": "AUTHOR_OF", "created_round": 0, "simulation_id": None},
+                        "src_uuid": "base_agent",
+                        "tgt_uuid": "base_doc",
+                        "src_name": "AgentA",
+                        "tgt_name": "TopicDoc",
+                    },
+                    # Round 1 edge
+                    {
+                        "r": {"uuid": "e_r1", "name": "PUBLISHED", "created_round": 1, "simulation_id": "sim_mixed"},
+                        "src_uuid": "base_agent",
+                        "tgt_uuid": "post_1",
+                        "src_name": "AgentA",
+                        "tgt_name": "Post1",
+                    },
+                    # Round 2 edge
+                    {
+                        "r": {"uuid": "e_r2", "name": "REPLIED", "created_round": 2, "simulation_id": "sim_mixed"},
+                        "src_uuid": "agent_b",
+                        "tgt_uuid": "post_1",
+                        "src_name": "AgentB",
+                        "tgt_name": "Post1",
+                    },
+                ]
+
+        mock_tx.run = mock_run
+        return tx_fn(mock_tx)
+
+    mock_session.execute_read = fake_execute_read
+
+    timeline = storage.get_graph_timeline("sim_mixed", graph_id="g_mixed")
+    assert timeline["simulation_id"] == "sim_mixed"
+    rounds = timeline["rounds"]
+    assert len(rounds) == 3
+
+    # Round 0: 2 baseline nodes, 1 baseline edge
+    assert rounds[0]["round"] == 0
+    assert len(rounds[0]["nodes_added"]) == 2
+    assert len(rounds[0]["edges_added"]) == 1
+    assert rounds[0]["cumulative_nodes"] == 2
+    assert rounds[0]["cumulative_edges"] == 1
+
+    # Round 1: 1 new node, 1 new edge
+    assert rounds[1]["round"] == 1
+    assert len(rounds[1]["nodes_added"]) == 1
+    assert len(rounds[1]["edges_added"]) == 1
+    assert rounds[1]["cumulative_nodes"] == 3
+    assert rounds[1]["cumulative_edges"] == 2
+
+    # Round 2: 1 new node, 1 new edge
+    assert rounds[2]["round"] == 2
+    assert len(rounds[2]["nodes_added"]) == 1
+    assert len(rounds[2]["edges_added"]) == 1
+    assert rounds[2]["cumulative_nodes"] == 4
+    assert rounds[2]["cumulative_edges"] == 3
