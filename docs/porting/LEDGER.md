@@ -76,6 +76,7 @@ Only the orchestrator edits this file.
 | 057 | - | Issue #75: real-time simulation streaming via SSE to replace frontend polling | feature | direct | medium | ported | PR #78 (`bfcae7a`) | SSE endpoint /api/simulation/<id>/stream with EventSource client fallback; reviewer APPROVE, tester PASS, 864 tests pass. |
 | 058 | - | Issue #76: process group isolation to guarantee full termination of child OASIS subprocesses | bugfix | direct | low | ported | PR #79 (`4c1728d`) | Cross-platform process group isolation and killpg escalation; reviewer APPROVE, tester PASS, 866 tests pass. |
 | 059 | - | Issue #77: custom agent archetypes beyond OASIS default personas | feature | direct | low | ported | PR #80 (`38ab692`) | AgentArchetype definitions, ratio allocation, and persona prompt guidance; reviewer APPROVE, tester PASS, 866 tests pass. |
+| 060 | - | Issue #81: visual level-of-detail and node rendering cap in D3 | feature | direct | medium | pending | `port/060` | Dynamic degree calculation, top-N node rendering cap, zoom-scale LOD, and search node injection. |
 
 ## Skipped (with reason)
 | Upstream commit | Reason |
