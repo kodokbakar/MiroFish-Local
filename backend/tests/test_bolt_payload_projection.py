@@ -261,3 +261,139 @@ def test_graph_data_api_endpoint_backward_compatibility():
         resp_emb = client.get("/api/graph/data/gid-123?include_embeddings=true")
         assert resp_emb.status_code == 200
         mock_builder.get_graph_data.assert_called_with("gid-123", include_embeddings=True)
+
+
+def test_node_to_dict_unexpected_null_attributes_and_missing_keys():
+    """Verify node_to_dict handles missing keys and explicit nulls from map projections."""
+    # Completely empty map projection
+    empty_res = node_to_dict({}, [])
+    assert empty_res["uuid"] == ""
+    assert empty_res["name"] == ""
+    assert empty_res["summary"] == ""
+    assert empty_res["attributes"] == {}
+    assert empty_res["created_at"] is None
+    assert empty_res["labels"] == []
+
+    # Map projection with unexpected nulls / non-dict attributes_json
+    null_node = {
+        "uuid": None,
+        "name": None,
+        "summary": None,
+        "attributes_json": None,
+        "created_at": None,
+    }
+    null_res = node_to_dict(null_node, ["Entity"])
+    assert null_res["uuid"] is None
+    assert null_res["name"] is None
+    assert null_res["summary"] is None
+    assert null_res["attributes"] == {}
+    assert null_res["created_at"] is None
+    assert null_res["labels"] == []
+
+    # Malformed attributes_json
+    bad_json_node = {
+        "uuid": "u-999",
+        "name": "BrokenJson",
+        "attributes_json": "{invalid-json}",
+    }
+    bad_res = node_to_dict(bad_json_node, ["Entity", "Test"])
+    assert bad_res["attributes"] == {}
+    assert bad_res["labels"] == ["Test"]
+
+
+def test_edge_to_dict_complex_attributes_and_include_embeddings_query():
+    """Verify edge_to_dict preserves complex nested attributes and include_embeddings=True query includes raw return."""
+    complex_attrs = {
+        "weight": 0.88,
+        "tags": ["ml", "nlp"],
+        "nested": {"deep": {"value": 42}},
+    }
+    edge_dict = {
+        "uuid": "rel-complex",
+        "name": "INTERACTS_WITH",
+        "fact": "Alpha interacts with Beta",
+        "attributes_json": json.dumps(complex_attrs),
+        "created_at": "2026-03-01",
+    }
+    res = edge_to_dict(edge_dict, "src-1", "tgt-1")
+    assert res["attributes"] == complex_attrs
+    assert res["source_node_uuid"] == "src-1"
+    assert res["target_node_uuid"] == "tgt-1"
+
+    # Test include_embeddings=True via Neo4jStorage
+    fake_driver = InMemoryNeo4jDriver()
+    mock_session = MagicMock()
+    mock_tx = MagicMock()
+
+    mock_tx.run.side_effect = [
+        [
+            {
+                "n": {
+                    "uuid": "u-1",
+                    "name": "Alpha",
+                    "attributes_json": "{}",
+                },
+                "labels": ["Entity", "Person"],
+            }
+        ],
+        [
+            {
+                "r": edge_dict,
+                "src_uuid": "src-1",
+                "tgt_uuid": "tgt-1",
+                "src_name": "Alpha",
+                "tgt_name": "Beta",
+            }
+        ],
+    ]
+    mock_session.execute_read.side_effect = lambda fn: fn(mock_tx)
+    mock_session.__enter__.return_value = mock_session
+
+    with patch("app.storage.neo4j_storage.GraphDatabase.driver") as mock_db_driver:
+        mock_db_driver.return_value = fake_driver
+        fake_driver.session = MagicMock(return_value=mock_session)
+
+        storage = Neo4jStorage(
+            uri="bolt://localhost:7687",
+            user="neo4j",
+            password="password",
+            embedding_service=MagicMock(),
+            ner_extractor=MagicMock(),
+        )
+
+        data = storage.get_graph_data("test-graph-id", include_embeddings=True)
+
+        assert len(data["edges"]) == 1
+        edge = data["edges"][0]
+        assert edge["attributes"] == complex_attrs
+        assert edge["source_node_name"] == "Alpha"
+        assert edge["target_node_name"] == "Beta"
+
+        # Verify Cypher query asked for raw n and r without projection
+        node_query = mock_tx.run.call_args_list[0][0][0]
+        assert "RETURN n, labels(n)" in node_query
+        edge_query = mock_tx.run.call_args_list[1][0][0]
+        assert "RETURN r, src.uuid AS src_uuid" in edge_query
+
+
+def test_graph_data_endpoint_direct_storage_call_assert_include_embeddings_false():
+    """Verify GET /api/graph/data/<graph_id> delegates to storage.get_graph_data with include_embeddings=False."""
+    app = create_app()
+    app.config["TESTING"] = True
+
+    mock_storage = MagicMock()
+    mock_storage.get_graph_data.return_value = {
+        "graph_id": "test-mock-gid",
+        "nodes": [],
+        "edges": [],
+        "node_count": 0,
+        "edge_count": 0,
+    }
+
+    with patch("app.api.graph._get_storage", return_value=mock_storage):
+        client = app.test_client()
+        resp = client.get("/api/graph/data/test-mock-gid")
+        assert resp.status_code == 200
+        mock_storage.get_graph_data.assert_called_once_with(
+            "test-mock-gid", include_embeddings=False
+        )
