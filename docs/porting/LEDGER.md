@@ -82,7 +82,7 @@ Only the orchestrator edits this file.
 | 063 | - | Issue #84: temporal graph evolution tracking across simulation rounds | feature | adapt | medium | ported | PR #88 (`bce51cf`) | Round-scoped graph mutation tagging and timeline playback API/visualizer; reviewer APPROVE, tester PASS, 8 backend tests pass. |
 | 064 | - | Issue #31: missing simulationId prop and unrendered steps 3-5 in MainView component | bugfix | direct | low | pending | `port/064` | Provide simulationId and render remaining steps or clean routing in MainView. |
 | 065 | - | Issue #33: stale env_status.json without OS process check blocks interview endpoints | bugfix | direct | low | pending | `port/065` | Check OS process alive alongside env_status.json in check_env_alive to prevent WSGI hang. |
-| 066 | - | Issue #89: sanitize path identifiers to prevent arbitrary directory deletion and path traversal | bugfix | direct | medium | pending | `port/066` | Sanitize entity identifiers and verify realpath within base directory before filesystem operations. |
+| 066 | - | Issue #89: sanitize path identifiers to prevent arbitrary directory deletion and path traversal | bugfix | direct | medium | in_review | `port/066` | Path traversal sanitization and realpath boundary validation in project, report, and simulation services/APIs; 901 backend tests pass. |
 | 067 | - | Issue #90: restrict CORS wildcard and require origin verification on API endpoints | bugfix | direct | low | pending | `port/067` | Restrict CORS wildcard, add origin verification, and default Flask host to 127.0.0.1. |
 
 ## Skipped (with reason)
