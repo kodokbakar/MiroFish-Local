@@ -2082,6 +2082,46 @@ def get_simulation_timeline(simulation_id: str):
         }), 500
 
 
+@simulation_bp.route('/<simulation_id>/graph-timeline', methods=['GET'])
+def get_simulation_graph_timeline(simulation_id: str):
+    """
+    Get graph evolution timeline grouped by simulation round.
+    Query parameters:
+        graph_id: Optional Graph ID
+    """
+    try:
+        storage = current_app.extensions.get('neo4j_storage')
+        if not storage:
+            return jsonify({
+                "code": 1,
+                "success": False,
+                "error": "Storage service not initialized"
+            }), 503
+
+        graph_id = request.args.get('graph_id')
+        if not graph_id:
+            state = SimulationRunner.get_simulation_state(simulation_id)
+            if state and getattr(state, "graph_id", None):
+                graph_id = state.graph_id
+
+        timeline = storage.get_graph_timeline(simulation_id=simulation_id, graph_id=graph_id)
+
+        return jsonify({
+            "code": 0,
+            "message": "success",
+            "success": True,
+            "data": timeline
+        })
+    except Exception as e:
+        logger.error(f"Failed to get graph timeline: {str(e)}")
+        return jsonify({
+            "code": 1,
+            "success": False,
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
+
+
 @simulation_bp.route('/<simulation_id>/agent-stats', methods=['GET'])
 def get_agent_stats(simulation_id: str):
     """

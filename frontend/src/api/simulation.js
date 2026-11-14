@@ -146,6 +146,19 @@ export const getSimulationTimeline = (simulationId, startRound = 0, endRound = n
 }
 
 /**
+ * Get simulation graph evolution timeline (grouped by rounds)
+ * @param {string} simulationId
+ * @param {string} graphId - Optional graph ID
+ */
+export const getSimulationGraphTimeline = (simulationId, graphId = null) => {
+  const params = {}
+  if (graphId) {
+    params.graph_id = graphId
+  }
+  return service.get(`/api/simulation/${simulationId}/graph-timeline`, { params })
+}
+
+/**
  * Get Agent statistics
  * @param {string} simulationId
  */

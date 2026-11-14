@@ -18,6 +18,8 @@ def node_to_dict(node: Any, labels: List[str]) -> Dict[str, Any]:
         "summary": props.get("summary", ""),
         "attributes": attributes,
         "created_at": props.get("created_at"),
+        "created_round": props.get("created_round", 0),
+        "simulation_id": props.get("simulation_id"),
     }
 
 
@@ -45,4 +47,6 @@ def edge_to_dict(
         "invalid_at": props.get("invalid_at"),
         "expired_at": props.get("expired_at"),
         "episode_ids": episode_ids,
+        "created_round": props.get("created_round", 0),
+        "simulation_id": props.get("simulation_id"),
     }

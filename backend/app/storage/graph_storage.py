@@ -38,13 +38,22 @@ class GraphStorage(ABC):
 
     @abstractmethod
     def persist_extraction(
-        self, graph_id: str, text: str, extraction: Dict[str, Any]
+        self,
+        graph_id: str,
+        text: str,
+        extraction: Dict[str, Any],
+        simulation_id: Optional[str] = None,
+        round_num: int = 0,
     ) -> str:
         """Embed and persist one extracted chunk; return its new episode ID."""
 
     @abstractmethod
     def persist_structured_activities(
-        self, graph_id: str, activities: List[Dict[str, Any]]
+        self,
+        graph_id: str,
+        activities: List[Dict[str, Any]],
+        simulation_id: Optional[str] = None,
+        round_num: int = 0,
     ) -> str:
         """
         Fast-path graph ingestion for pre-structured social agent activities.
@@ -57,6 +66,8 @@ class GraphStorage(ABC):
         graph_id: str,
         text: str,
         ontology: Optional[Dict[str, Any]] = None,
+        simulation_id: Optional[str] = None,
+        round_num: int = 0,
     ) -> str:
         """
         Process text: NER/RE → create nodes/edges → return episode_id.
@@ -153,4 +164,20 @@ class GraphStorage(ABC):
         Returns dict with:
             graph_id, nodes, edges, node_count, edge_count
         Edge dicts include derived fields: fact_type, source_node_name, target_node_name
+        """
+
+    @abstractmethod
+    def get_graph_timeline(
+        self, simulation_id: str, graph_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Get graph evolution timeline grouped by simulation round.
+        Returns dict with:
+            simulation_id: str
+            rounds: list of dicts with:
+                round: int
+                nodes_added: list of node dicts
+                edges_added: list of edge dicts
+                cumulative_nodes: int
+                cumulative_edges: int
         """

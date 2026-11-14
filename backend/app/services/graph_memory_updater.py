@@ -30,6 +30,7 @@ class AgentActivity:
     action_args: Dict[str, Any]
     round_num: int
     timestamp: str
+    simulation_id: Optional[str] = None
 
     def to_episode_text(self) -> str:
         """
@@ -192,16 +193,18 @@ class GraphMemoryUpdater:
     MAX_RETRIES = 3
     RETRY_DELAY = 2
 
-    def __init__(self, graph_id: str, storage: GraphStorage):
+    def __init__(self, graph_id: str, storage: GraphStorage, simulation_id: Optional[str] = None):
         """
         InitializeUpdatedevice
 
         Args:
             graph_id: GraphID
             storage: GraphStorage instance (injected)
+            simulation_id: Optional Simulation ID for timeline tracking
         """
         self.graph_id = graph_id
         self.storage = storage
+        self.simulation_id = simulation_id
 
         self._activity_queue: Queue = Queue()
 
@@ -278,6 +281,7 @@ class GraphMemoryUpdater:
             action_args=data.get("action_args", {}),
             round_num=data.get("round", 0),
             timestamp=data.get("timestamp", datetime.now().isoformat()),
+            simulation_id=data.get("simulation_id") or self.simulation_id,
         )
 
         self.add_activity(activity)
@@ -318,12 +322,33 @@ class GraphMemoryUpdater:
 
         for attempt in range(self.MAX_RETRIES):
             try:
+                # Extract round_num and simulation_id from activities or self
+                batch_round = 0
+                batch_sim_id = self.simulation_id
+                for act in activities:
+                    r = getattr(act, "round_num", None) if not isinstance(act, dict) else act.get("round_num")
+                    if r is not None and r > 0:
+                        batch_round = r
+                    s = getattr(act, "simulation_id", None) if not isinstance(act, dict) else act.get("simulation_id")
+                    if s:
+                        batch_sim_id = s
+
                 if hasattr(self.storage, "persist_structured_activities"):
-                    self.storage.persist_structured_activities(self.graph_id, activities)
+                    self.storage.persist_structured_activities(
+                        self.graph_id,
+                        activities,
+                        simulation_id=batch_sim_id,
+                        round_num=batch_round,
+                    )
                 else:
                     episode_texts = [activity.to_episode_text() for activity in activities]
                     combined_text = "\n".join(episode_texts)
-                    self.storage.add_text(self.graph_id, combined_text)
+                    self.storage.add_text(
+                        self.graph_id,
+                        combined_text,
+                        simulation_id=batch_sim_id,
+                        round_num=batch_round,
+                    )
 
                 self._total_sent += 1
                 self._total_items_sent += len(activities)
@@ -407,7 +432,7 @@ class GraphMemoryManager:
             if simulation_id in cls._updaters:
                 cls._updaters[simulation_id].stop()
 
-            updater = GraphMemoryUpdater(graph_id, storage)
+            updater = GraphMemoryUpdater(graph_id, storage, simulation_id=simulation_id)
             updater.start()
             cls._updaters[simulation_id] = updater
 
