@@ -1,9 +1,53 @@
 <template>
   <div class="graph-panel">
     <div class="panel-header">
-      <span class="panel-title">Graph Relationship Visualization</span>
+      <div class="header-left">
+        <span class="panel-title">Graph Relationship Visualization</span>
+        <div v-if="graphData && graphData.nodes && graphData.nodes.length" class="graph-stats-badge">
+          Showing {{ lodResult.visibleNodeCount }} of {{ lodResult.totalNodeCount }} nodes
+        </div>
+      </div>
       <!-- Top Toolbar (Internal Top Right) -->
       <div class="header-tools">
+        <!-- Node Cap Control -->
+        <div class="cap-control-group">
+          <span class="cap-label">Limit:</span>
+          <div class="cap-buttons">
+            <button
+              v-for="opt in capOptions"
+              :key="opt.label"
+              class="cap-btn"
+              :class="{ active: nodeCap === opt.value }"
+              @click="setNodeCap(opt.value)"
+            >
+              {{ opt.label }}
+            </button>
+          </div>
+        </div>
+
+        <!-- Offscreen Node Search / Inject -->
+        <div class="node-search-container" v-if="graphData && graphData.nodes">
+          <input
+            type="text"
+            v-model="searchQuery"
+            placeholder="Find node..."
+            class="node-search-input"
+            @focus="searchFocused = true"
+            @blur="handleSearchBlur"
+          />
+          <div v-if="searchFocused && searchResults.length" class="node-search-dropdown">
+            <div
+              v-for="item in searchResults"
+              :key="item.uuid"
+              class="node-search-item"
+              @mousedown.prevent="injectNode(item.uuid)"
+            >
+              <span class="search-item-name">{{ item.name || item.uuid }}</span>
+              <span class="search-item-action">+ Add to view</span>
+            </div>
+          </div>
+        </div>
+
         <button class="tool-btn" @click="$emit('refresh')" :disabled="loading" title="Refresh graph">
           <span class="icon-refresh" :class="{ 'spinning': loading }">↻</span>
           <span class="btn-text">Refresh</span>
@@ -238,6 +282,12 @@
 <script setup>
 import { ref, onMounted, onUnmounted, watch, nextTick, computed } from 'vue'
 import * as d3 from 'd3'
+import {
+  calculateNodeDegrees,
+  filterVisibleGraph,
+  searchOffscreenNodes,
+  shouldShowElementLabel
+} from '../utils/graphLod.js'
 
 const props = defineProps({
   graphData: Object,
@@ -255,6 +305,57 @@ const showEdgeLabels = ref(true) // Default show edge labels
 const expandedSelfLoops = ref(new Set()) // Expanded self-loop items
 const showSimulationFinishedHint = ref(false) // Simulation finished hint
 const wasSimulating = ref(false) // Track whether was simulating before
+
+// LOD & Rendering Cap state
+const nodeCap = ref(300)
+const capOptions = [
+  { label: '100', value: 100 },
+  { label: '300', value: 300 },
+  { label: '500', value: 500 },
+  { label: 'All', value: null }
+]
+const injectedNodeIds = ref(new Set())
+const searchQuery = ref('')
+const searchFocused = ref(false)
+const currentZoomScale = ref(1.0)
+const hoveredNodeId = ref(null)
+
+const setNodeCap = (val) => {
+  nodeCap.value = val
+  nextTick(renderGraph)
+}
+
+const lodResult = computed(() => {
+  const nodes = props.graphData?.nodes || []
+  const edges = props.graphData?.edges || []
+  return filterVisibleGraph({
+    nodes,
+    edges,
+    cap: nodeCap.value,
+    injectedNodeIds: injectedNodeIds.value
+  })
+})
+
+const searchResults = computed(() => {
+  const nodes = props.graphData?.nodes || []
+  const visibleIds = (lodResult.value?.visibleNodes || []).map(n => n.uuid)
+  return searchOffscreenNodes(nodes, visibleIds, searchQuery.value)
+})
+
+const injectNode = (uuid) => {
+  const updated = new Set(injectedNodeIds.value)
+  updated.add(uuid)
+  injectedNodeIds.value = updated
+  searchQuery.value = ''
+  searchFocused.value = false
+  nextTick(renderGraph)
+}
+
+const handleSearchBlur = () => {
+  setTimeout(() => {
+    searchFocused.value = false
+  }, 200)
+}
 
 // Dismiss simulation finished hint
 const dismissFinishedHint = () => {
@@ -324,6 +425,35 @@ const closeDetailPanel = () => {
 let currentSimulation = null
 let linkLabelsRef = null
 let linkLabelBgRef = null
+let nodeLabelsRef = null
+
+const updateLabelVisibility = () => {
+  const scale = currentZoomScale.value
+  const selectedNodeId = selectedItem.value?.type === 'node' ? selectedItem.value.data?.uuid : null
+
+  if (nodeLabelsRef) {
+    nodeLabelsRef.style('display', d => {
+      const isHovered = hoveredNodeId.value === d.id
+      const isSelected = selectedNodeId === d.id
+      const isHighDegree = (d.degree || 0) >= 5
+      const show = shouldShowElementLabel({
+        scale,
+        isHovered,
+        isSelected,
+        isHighDegree
+      })
+      return show ? 'block' : 'none'
+    })
+  }
+
+  const showEdges = showEdgeLabels.value && scale >= 0.8
+  if (linkLabelsRef) {
+    linkLabelsRef.style('display', showEdges ? 'block' : 'none')
+  }
+  if (linkLabelBgRef) {
+    linkLabelBgRef.style('display', showEdges ? 'block' : 'none')
+  }
+}
 
 const renderGraph = () => {
   if (!graphSvg.value || !props.graphData) return
@@ -344,10 +474,13 @@ const renderGraph = () => {
     
   svg.selectAll('*').remove()
   
-  const nodesData = props.graphData.nodes || []
-  const edgesData = props.graphData.edges || []
+  const filtered = lodResult.value
+  const nodesData = filtered.visibleNodes || []
+  const edgesData = filtered.visibleEdges || []
   
   if (nodesData.length === 0) return
+
+  const degrees = calculateNodeDegrees(nodesData, edgesData)
 
   // Prepare data
   const nodeMap = {}
@@ -357,6 +490,7 @@ const renderGraph = () => {
     id: n.uuid,
     name: n.name || 'Unnamed',
     type: n.labels?.find(l => l !== 'Entity') || 'Entity',
+    degree: degrees[n.uuid] || 0,
     rawData: n
   }))
 
@@ -491,6 +625,8 @@ const renderGraph = () => {
   // Zoom
   svg.call(d3.zoom().extent([[0, 0], [width, height]]).scaleExtent([0.1, 4]).on('zoom', (event) => {
     g.attr('transform', event.transform)
+    currentZoomScale.value = event.transform.k
+    updateLabelVisibility()
   }))
 
   // Links - use path to support curves
@@ -715,11 +851,15 @@ const renderGraph = () => {
       }
     })
     .on('mouseenter', (event, d) => {
+      hoveredNodeId.value = d.id
+      updateLabelVisibility()
       if (!selectedItem.value || selectedItem.value.data?.uuid !== d.rawData.uuid) {
         d3.select(event.target).attr('stroke', '#333').attr('stroke-width', 3)
       }
     })
     .on('mouseleave', (event, d) => {
+      hoveredNodeId.value = null
+      updateLabelVisibility()
       if (!selectedItem.value || selectedItem.value.data?.uuid !== d.rawData.uuid) {
         d3.select(event.target).attr('stroke', '#fff').attr('stroke-width', 2.5)
       }
@@ -737,6 +877,9 @@ const renderGraph = () => {
     .attr('dy', 4)
     .style('pointer-events', 'none')
     .style('font-family', 'system-ui, sans-serif')
+
+  nodeLabelsRef = nodeLabels
+  updateLabelVisibility()
 
   simulation.on('tick', () => {
     // Update curve paths
@@ -838,11 +981,137 @@ onUnmounted(() => {
   pointer-events: none;
 }
 
+.header-left {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .panel-title {
   font-size: 14px;
   font-weight: 600;
   color: #333;
   pointer-events: auto;
+}
+
+.graph-stats-badge {
+  font-size: 12px;
+  color: #666;
+  background: rgba(0, 0, 0, 0.05);
+  padding: 3px 8px;
+  border-radius: 12px;
+  font-weight: 500;
+}
+
+.cap-control-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #FFF;
+  border: 1px solid #E0E0E0;
+  padding: 2px 6px;
+  border-radius: 6px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+}
+
+.cap-label {
+  font-size: 11px;
+  color: #888;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.cap-buttons {
+  display: flex;
+  gap: 2px;
+}
+
+.cap-btn {
+  background: transparent;
+  border: none;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: #666;
+  transition: all 0.15s;
+}
+
+.cap-btn:hover {
+  background: #f0f0f0;
+  color: #111;
+}
+
+.cap-btn.active {
+  background: #7B2D8E;
+  color: #fff;
+  font-weight: 600;
+}
+
+.node-search-container {
+  position: relative;
+}
+
+.node-search-input {
+  width: 120px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid #E0E0E0;
+  border-radius: 6px;
+  font-size: 12px;
+  outline: none;
+  background: #FFF;
+  transition: all 0.2s;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+}
+
+.node-search-input:focus {
+  width: 160px;
+  border-color: #7B2D8E;
+}
+
+.node-search-dropdown {
+  position: absolute;
+  top: 36px;
+  left: 0;
+  right: 0;
+  min-width: 180px;
+  max-height: 180px;
+  overflow-y: auto;
+  background: #FFF;
+  border: 1px solid #E0E0E0;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+  z-index: 30;
+}
+
+.node-search-item {
+  padding: 6px 10px;
+  font-size: 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.node-search-item:hover {
+  background: #F5F5F5;
+}
+
+.search-item-name {
+  color: #333;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100px;
+}
+
+.search-item-action {
+  font-size: 10px;
+  color: #7B2D8E;
+  font-weight: 500;
 }
 
 .header-tools {
