@@ -19,7 +19,7 @@ class GraphStorage(ABC):
         """Create a new graph. Returns graph_id."""
 
     @abstractmethod
-    def delete_graph(self, graph_id: str) -> None:
+    def delete_graph(self, graph_id: str, batch_size: int = 1000) -> None:
         """Delete a graph and all its nodes/edges."""
 
     @abstractmethod
