@@ -96,3 +96,65 @@ test('ordered list parser eliminates exponential ReDoS catastrophic backtracking
     'markdown list parser must not use nested quantifier (?:<li...>.*?</li>)+ which causes exponential backtracking'
   )
 })
+
+
+test('edge case: deeply nested ordered lists', () => {
+  const markdown = ['1. Level 0', '  1. Level 1', '    1. Level 2'].join('\n')
+  const container = parseHtml(renderMarkdown(markdown))
+  const ol = container.querySelector('ol.md-ol')
+  assert.ok(ol)
+  const items = container.querySelectorAll('li.md-oli')
+  assert.equal(items.length, 3)
+  assert.equal(items[0].getAttribute('data-level'), '0')
+  assert.equal(items[1].getAttribute('data-level'), '1')
+  assert.equal(items[2].getAttribute('data-level'), '2')
+
+  // Direct regex test on nested tags
+  const nestedHtml = '<ol class="md-ol"><li class="md-oli">Item<ol class="md-ol"><li class="md-oli">Sub</li></ol></li></ol>'
+  const tokens = nestedHtml.split(/(<ol class="md-ol">[\s\S]*?<\/ol>)/g)
+  assert.ok(tokens.length > 1)
+})
+
+test('edge case: massive payload 50+ list items unclosed or truncated completes in < 15ms', () => {
+  const listRegex = /(<ol class="md-ol">[\s\S]*?<\/ol>)/g
+  const massiveUnclosed = '<ol class="md-ol">' + '<li class="md-oli" data-level="0">item</li>'.repeat(60)
+  const start = performance.now()
+  const tokens = massiveUnclosed.split(listRegex)
+  const duration = performance.now() - start
+
+  assert.ok(tokens)
+  assert.ok(
+    duration < 15,
+    'Parsing 60 unclosed list items took ' + duration.toFixed(2) + 'ms (must be < 15ms)'
+  )
+
+  // Also verify renderMarkdown handles 50+ items in < 15ms
+  const mdList = Array.from({ length: 60 }, (_, i) => (i + 1) + '. Item ' + i).join('\n')
+  const startMd = performance.now()
+  const rendered = renderMarkdown(mdList)
+  const durationMd = performance.now() - startMd
+  assert.ok(rendered)
+  assert.ok(
+    durationMd < 15,
+    'renderMarkdown for 60 items took ' + durationMd.toFixed(2) + 'ms (must be < 15ms)'
+  )
+})
+
+test('edge case: mixed list types ordered immediately followed by unordered or blockquote', () => {
+  const markdown = ['1. First ordered', '- First unordered', '> A blockquote'].join('\n')
+  const container = parseHtml(renderMarkdown(markdown))
+  assert.ok(container.querySelector('ol.md-ol'))
+  assert.ok(container.querySelector('ul.md-ul'))
+  assert.ok(container.querySelector('blockquote.md-quote'))
+})
+
+test('edge case: malformed list attributes and empty list tags', () => {
+  const listRegex = /(<ol class="md-ol">[\s\S]*?<\/ol>)/g
+  const emptyOl = '<ol class="md-ol"></ol>'
+  const tokens = emptyOl.split(listRegex)
+  assert.deepEqual(tokens, ['', '<ol class="md-ol"></ol>', ''])
+
+  const malformed = '<ol class="md-ol" extra-attr="val"><li class="md-oli">Item</li></ol>'
+  const tokensMalformed = malformed.split(listRegex)
+  assert.ok(tokensMalformed.length >= 1)
+})
