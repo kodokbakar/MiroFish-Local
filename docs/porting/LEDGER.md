@@ -84,6 +84,10 @@ Only the orchestrator edits this file.
 | 065 | - | Issue #33: stale env_status.json without OS process check blocks interview endpoints | bugfix | direct | low | pending | PR #109 (`port/065`) | Check OS process alive alongside env_status.json in check_env_alive; reviewer APPROVE, tester PASS, 27 backend tests pass. |
 | 066 | - | Issue #89: sanitize path identifiers to prevent arbitrary directory deletion and path traversal | bugfix | direct | medium | pending | PR #108 (`port/066`) | Sanitize entity identifiers and verify realpath within base directory; reviewer APPROVE, tester PASS, 11 backend tests pass. |
 | 067 | - | Issue #90: restrict CORS wildcard and require origin verification on API endpoints | bugfix | direct | low | pending | PR #106 (`port/067`) | Restrict CORS wildcard, add origin verification, and default Flask host to 127.0.0.1; reviewer APPROVE, tester PASS, 6 backend tests pass. |
+| 068 | - | Issue #91: prevent SSRF and bearer token leakage in probe_llm_endpoint | bugfix | direct | low | pending | `port/068` | Validate destination IP/host to block link-local/cloud metadata SSRF and avoid Bearer leak. |
+| 069 | - | Issue #92: synchronize simulation start with mutex lock to eliminate TOCTOU zombie subprocesses | bugfix | direct | low | pending | `port/069` | Mutex lock and atomic state transition for simulation start to eliminate TOCTOU subprocess duplicates. |
+| 070 | - | Issue #93: resolve Neo4j connection pool starvation caused by blocking embedding calls inside active sessions | bugfix | adapt | low | pending | `port/070` | Compute embeddings prior to acquiring Neo4j session and reuse vector for scope=both. |
+| 071 | - | Issue #94: resolve SSE parser crash on unhandled Ref methods and undefined actions identifier | bugfix | direct | low | pending | `port/071` | Fix actionIds.value ref unwrapping and actions -> allActions identifier in Step3Simulation. |
 
 ## Skipped (with reason)
 | Upstream commit | Reason |
