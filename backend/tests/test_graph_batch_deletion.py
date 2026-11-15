@@ -86,6 +86,45 @@ class TestGraphBatchDeletionRegression(unittest.TestCase):
             "delete_graph executes deletion monolithically without batching (IN TRANSACTIONS or LIMIT batch loop)",
         )
 
+    def test_delete_graph_iterates_until_all_batches_deleted(self):
+        """
+        Verify that delete_graph continues issuing batch deletion queries
+        until count is 0, respecting custom batch_size.
+        """
+        self.executed_queries.clear()
+        entity_counts = [500, 0]
+        episode_counts = [200, 0]
+
+        def fake_run_batches(query, **kwargs):
+            self.executed_queries.append((query.strip(), kwargs))
+            mock_result = MagicMock()
+            if ":Entity" in query:
+                mock_result.single.return_value = {
+                    "deleted": entity_counts.pop(0) if entity_counts else 0
+                }
+            elif ":Episode" in query:
+                mock_result.single.return_value = {
+                    "deleted": episode_counts.pop(0) if episode_counts else 0
+                }
+            else:
+                mock_result.single.return_value = {"deleted": 0}
+            return mock_result
+
+        def fake_execute_write(fn, *args, **kwargs):
+            fake_tx = MagicMock()
+            fake_tx.run.side_effect = fake_run_batches
+            return fn(fake_tx, *args, **kwargs)
+
+        self.mock_session.execute_write.side_effect = fake_execute_write
+
+        self.storage.delete_graph("test_graph_123", batch_size=500)
+
+        # 2 Entity queries + 2 Episode queries + 1 Graph node query = 5 queries
+        self.assertEqual(len(self.executed_queries), 5)
+        for _, kwargs in self.executed_queries[:4]:
+            self.assertEqual(kwargs.get("batch_size"), 500)
+            self.assertEqual(kwargs.get("gid"), "test_graph_123")
+
 
 if __name__ == "__main__":
     unittest.main()
