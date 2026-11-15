@@ -47,13 +47,13 @@ class TestStorageBatchUnwindAndIndexing(unittest.TestCase):
 
     def test_schema_indexes_defined_and_included(self):
         """Verify schema index queries exist and are included in ALL_SCHEMA_QUERIES."""
-        self.assertIn("CREATE INDEX entity_graph_name IF NOT EXISTS", neo4j_schema.CREATE_ENTITY_GRAPH_NAME_INDEX)
-        self.assertIn("FOR (n:Entity) ON (n.graph_id, n.name_lower)", neo4j_schema.CREATE_ENTITY_GRAPH_NAME_INDEX)
+        self.assertIn("CREATE CONSTRAINT entity_graph_name_unique IF NOT EXISTS", neo4j_schema.CREATE_ENTITY_GRAPH_NAME_CONSTRAINT)
+        self.assertIn("FOR (n:Entity) REQUIRE (n.graph_id, n.name_lower) IS UNIQUE", neo4j_schema.CREATE_ENTITY_GRAPH_NAME_CONSTRAINT)
 
         self.assertIn("CREATE INDEX relation_graph_id IF NOT EXISTS", neo4j_schema.CREATE_RELATION_GRAPH_ID_INDEX)
         self.assertIn("FOR ()-[r:RELATION]-() ON (r.graph_id)", neo4j_schema.CREATE_RELATION_GRAPH_ID_INDEX)
 
-        self.assertIn(neo4j_schema.CREATE_ENTITY_GRAPH_NAME_INDEX, neo4j_schema.ALL_SCHEMA_QUERIES)
+        self.assertIn(neo4j_schema.CREATE_ENTITY_GRAPH_NAME_CONSTRAINT, neo4j_schema.ALL_SCHEMA_QUERIES)
         self.assertIn(neo4j_schema.CREATE_RELATION_GRAPH_ID_INDEX, neo4j_schema.ALL_SCHEMA_QUERIES)
         self.assertIn("SHOW INDEXES", neo4j_schema.CHECK_INDEXES_QUERY)
 
@@ -63,7 +63,7 @@ class TestStorageBatchUnwindAndIndexing(unittest.TestCase):
         mock_session = MagicMock()
         mock_driver.session.return_value.__enter__.return_value = mock_session
         mock_session.run.return_value = [
-            {"name": "entity_graph_name", "state": "ONLINE", "populationPercent": 100.0},
+            {"name": "entity_graph_name_unique", "state": "ONLINE", "populationPercent": 100.0},
             {"name": "relation_graph_id", "state": "ONLINE", "populationPercent": 100.0},
         ]
 
@@ -81,8 +81,8 @@ class TestStorageBatchUnwindAndIndexing(unittest.TestCase):
 
         # Return POPULATING first, then ONLINE
         mock_session.run.side_effect = [
-            [{"name": "entity_graph_name", "state": "POPULATING", "populationPercent": 50.0}],
-            [{"name": "entity_graph_name", "state": "ONLINE", "populationPercent": 100.0}],
+            [{"name": "entity_graph_name_unique", "state": "POPULATING", "populationPercent": 50.0}],
+            [{"name": "entity_graph_name_unique", "state": "ONLINE", "populationPercent": 100.0}],
         ]
 
         storage = Neo4jStorage.__new__(Neo4jStorage)
@@ -114,7 +114,7 @@ class TestStorageBatchUnwindAndIndexing(unittest.TestCase):
         mock_session = MagicMock()
         mock_driver.session.return_value.__enter__.return_value = mock_session
         mock_session.run.return_value = [
-            {"name": "entity_graph_name", "state": "ONLINE", "populationPercent": 100.0, "type": "RANGE"}
+            {"name": "entity_graph_name_unique", "state": "ONLINE", "populationPercent": 100.0, "type": "RANGE"}
         ]
 
         apply_schema(mock_driver)
@@ -122,7 +122,7 @@ class TestStorageBatchUnwindAndIndexing(unittest.TestCase):
 
         status = get_index_status(mock_driver)
         self.assertEqual(len(status), 1)
-        self.assertEqual(status[0]["name"], "entity_graph_name")
+        self.assertEqual(status[0]["name"], "entity_graph_name_unique")
 
         online = wait_for_indexes(mock_driver, timeout_sec=1.0)
         self.assertTrue(online)
