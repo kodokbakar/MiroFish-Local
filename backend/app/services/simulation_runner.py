@@ -716,6 +716,8 @@ class SimulationRunner:
                         pass
                     cls._stderr_files.pop(simulation_id, None)
 
+                cls._mark_env_stopped(simulation_id)
+
             # Only pop monitor thread if it is current thread
             if cls._monitor_threads.get(simulation_id) is threading.current_thread():
                 cls._monitor_threads.pop(simulation_id, None)
@@ -1141,6 +1143,7 @@ class SimulationRunner:
         if not latest_state.completed_at:
             latest_state.completed_at = datetime.now().isoformat()
         cls._save_run_state(latest_state)
+        cls._mark_env_stopped(simulation_id)
 
         # Stop graph memory updater
         if cls._graph_memory_enabled.get(simulation_id, False):
@@ -1746,6 +1749,32 @@ class SimulationRunner:
     # ============== Interview functionality ==============
     
     @classmethod
+    def _mark_env_stopped(cls, simulation_id: str):
+        """Update env_status.json to stopped if simulation directory exists."""
+        sim_dir = os.path.join(cls.RUN_STATE_DIR, simulation_id)
+        if not os.path.exists(sim_dir):
+            return
+        status_file = os.path.join(sim_dir, "env_status.json")
+        try:
+            current = {}
+            if os.path.exists(status_file):
+                try:
+                    with open(status_file, "r", encoding="utf-8") as f:
+                        current = json.load(f)
+                except (json.JSONDecodeError, OSError):
+                    current = {}
+            if not isinstance(current, dict):
+                current = {}
+            current["status"] = "stopped"
+            current["twitter_available"] = False
+            current["reddit_available"] = False
+            current["timestamp"] = datetime.now().isoformat()
+            with open(status_file, "w", encoding="utf-8") as f:
+                json.dump(current, f, ensure_ascii=False, indent=2)
+        except OSError as e:
+            logger.warning(f"Failed to update env_status.json to stopped for {simulation_id}: {e}")
+
+    @classmethod
     def check_env_alive(cls, simulation_id: str) -> bool:
         """
         Check if simulation environment is alive (can receive Interview commands)
@@ -1761,7 +1790,14 @@ class SimulationRunner:
             return False
 
         ipc_client = SimulationIPCClient(sim_dir)
-        return ipc_client.check_env_alive()
+        if not ipc_client.check_env_alive():
+            return False
+
+        if not cls.is_process_alive(simulation_id):
+            cls._mark_env_stopped(simulation_id)
+            return False
+
+        return True
 
     @classmethod
     def get_env_status_detail(cls, simulation_id: str) -> Dict[str, Any]:
@@ -1790,6 +1826,8 @@ class SimulationRunner:
         try:
             with open(status_file, 'r', encoding='utf-8') as f:
                 status = json.load(f)
+            if not isinstance(status, dict):
+                return default_status
             return {
                 "status": status.get("status", "stopped"),
                 "twitter_available": status.get("twitter_available", False),
@@ -1832,10 +1870,10 @@ class SimulationRunner:
         if not os.path.exists(sim_dir):
             raise ValueError(f"Simulation does not exist: {simulation_id}")
 
-        ipc_client = SimulationIPCClient(sim_dir)
-
-        if not ipc_client.check_env_alive():
+        if not cls.check_env_alive(simulation_id):
             raise ValueError(f"Simulation environment not running or closed, cannot execute Interview: {simulation_id}")
+
+        ipc_client = SimulationIPCClient(sim_dir)
 
         logger.info(f"Send Interview command: simulation_id={simulation_id}, agent_id={agent_id}, platform={platform}")
 
@@ -1894,10 +1932,10 @@ class SimulationRunner:
         if not os.path.exists(sim_dir):
             raise ValueError(f"Simulation does not exist: {simulation_id}")
 
-        ipc_client = SimulationIPCClient(sim_dir)
-
-        if not ipc_client.check_env_alive():
+        if not cls.check_env_alive(simulation_id):
             raise ValueError(f"Simulation environment not running or closed, cannot execute Interview: {simulation_id}")
+
+        ipc_client = SimulationIPCClient(sim_dir)
 
         logger.info(f"Send batch Interview command: simulation_id={simulation_id}, count={len(interviews)}, platform={platform}")
 
@@ -2004,13 +2042,13 @@ class SimulationRunner:
         if not os.path.exists(sim_dir):
             raise ValueError(f"Simulation does not exist: {simulation_id}")
         
-        ipc_client = SimulationIPCClient(sim_dir)
-        
-        if not ipc_client.check_env_alive():
+        if not cls.check_env_alive(simulation_id):
             return {
                 "success": True,
                 "message": "Environment already closed"
             }
+
+        ipc_client = SimulationIPCClient(sim_dir)
         
         logger.info(f"Send close environment command: simulation_id={simulation_id}")
         
