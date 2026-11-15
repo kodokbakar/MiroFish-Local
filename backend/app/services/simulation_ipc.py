@@ -279,6 +279,8 @@ class SimulationIPCClient:
         try:
             with open(status_file, 'r', encoding='utf-8') as f:
                 status = json.load(f)
+            if not isinstance(status, dict):
+                return False
             return status.get("status") == "alive"
         except (json.JSONDecodeError, OSError):
             return False

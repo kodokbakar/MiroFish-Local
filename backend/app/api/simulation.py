@@ -17,6 +17,7 @@ from ..services.oasis_profile_generator import OasisProfileGenerator
 from ..services.simulation_manager import SimulationManager, SimulationStatus
 from ..services.simulation_runner import SimulationRunner, RunnerStatus
 from ..utils.logger import get_logger
+from ..utils.path_security import get_safe_path
 from ..models.project import ProjectManager
 
 logger = get_logger('mirofish.api.simulation')
@@ -272,7 +273,10 @@ def _check_simulation_prepared(simulation_id: str) -> tuple:
     Returns:
         (is_prepared: bool, info: dict)
     """
-    simulation_dir = os.path.join(Config.OASIS_SIMULATION_DATA_DIR, simulation_id)
+    try:
+        simulation_dir = get_safe_path(Config.OASIS_SIMULATION_DATA_DIR, simulation_id)
+    except ValueError:
+        return False, {"reason": "Invalid simulation ID"}
     
     # Check if directory exists
     if not os.path.exists(simulation_dir):
@@ -833,6 +837,12 @@ def get_simulation(simulation_id: str):
             "data": result
         })
         
+    except ValueError as e:
+        return jsonify({
+            "success": False,
+            "error": f"Invalid simulation ID: {str(e)}"
+        }), 400
+        
     except Exception as e:
         logger.error(f"Failed to get simulation status: {str(e)}")
         return jsonify({
@@ -1068,10 +1078,16 @@ def get_simulation_profiles(simulation_id: str):
         })
         
     except ValueError as e:
+        msg = str(e)
+        if "does not exist" in msg:
+            return jsonify({
+                "success": False,
+                "error": msg
+            }), 404
         return jsonify({
             "success": False,
-            "error": str(e)
-        }), 404
+            "error": f"Invalid simulation ID: {msg}"
+        }), 400
         
     except Exception as e:
         logger.error(f"GetProfileFailed: {str(e)}")
@@ -1118,7 +1134,7 @@ def get_simulation_profiles_realtime(simulation_id: str):
         platform = request.args.get('platform') or _get_default_platform(simulation_id)
         
         # Get simulation directory
-        sim_dir = os.path.join(Config.OASIS_SIMULATION_DATA_DIR, simulation_id)
+        sim_dir = get_safe_path(Config.OASIS_SIMULATION_DATA_DIR, simulation_id)
         
         if not os.path.exists(sim_dir):
             return jsonify({
@@ -1188,6 +1204,12 @@ def get_simulation_profiles_realtime(simulation_id: str):
             }
         })
         
+    except ValueError as e:
+        return jsonify({
+            "success": False,
+            "error": f"Invalid simulation ID: {str(e)}"
+        }), 400
+        
     except Exception as e:
         logger.error(f"Real-time getProfileFailed: {str(e)}")
         return jsonify({
@@ -1226,7 +1248,7 @@ def get_simulation_config_realtime(simulation_id: str):
     
     try:
         # Get simulation directory
-        sim_dir = os.path.join(Config.OASIS_SIMULATION_DATA_DIR, simulation_id)
+        sim_dir = get_safe_path(Config.OASIS_SIMULATION_DATA_DIR, simulation_id)
         
         if not os.path.exists(sim_dir):
             return jsonify({
@@ -1318,6 +1340,12 @@ def get_simulation_config_realtime(simulation_id: str):
             "data": response_data
         })
         
+    except ValueError as e:
+        return jsonify({
+            "success": False,
+            "error": f"Invalid simulation ID: {str(e)}"
+        }), 400
+        
     except Exception as e:
         logger.error(f"Real-time getConfigFailed: {str(e)}")
         return jsonify({
@@ -1354,6 +1382,12 @@ def get_simulation_config(simulation_id: str):
             "data": config
         })
         
+    except ValueError as e:
+        return jsonify({
+            "success": False,
+            "error": f"Invalid simulation ID: {str(e)}"
+        }), 400
+        
     except Exception as e:
         logger.error(f"Failed to get configuration: {str(e)}")
         return jsonify({
@@ -1382,6 +1416,12 @@ def download_simulation_config(simulation_id: str):
             as_attachment=True,
             download_name="simulation_config.json"
         )
+        
+    except ValueError as e:
+        return jsonify({
+            "success": False,
+            "error": f"Invalid simulation ID: {str(e)}"
+        }), 400
         
     except Exception as e:
         logger.error(f"Failed to download configuration: {str(e)}")

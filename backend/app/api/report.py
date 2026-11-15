@@ -156,6 +156,8 @@ def get_report(report_id: str):
         if not report:
             return jsonify({"success": False, "error": f"Report does not exist: {report_id}"}), 404
         return jsonify({"success": True, "data": report.to_dict()})
+    except ValueError as e:
+        return jsonify({"success": False, "error": f"Invalid report ID: {str(e)}"}), 400
     except Exception as e:
         logger.error(f"Failed to get report: {str(e)}")
         return jsonify({"success": False, "error": str(e), "traceback": traceback.format_exc()}), 500
@@ -168,6 +170,8 @@ def get_report_by_simulation(simulation_id: str):
         if not report:
             return jsonify({"success": False, "error": f"No report available for this simulation: {simulation_id}", "has_report": False}), 404
         return jsonify({"success": True, "data": report.to_dict()})
+    except ValueError as e:
+        return jsonify({"success": False, "error": f"Invalid simulation ID: {str(e)}"}), 400
     except Exception as e:
         logger.error(f"Failed to get report: {str(e)}")
         return jsonify({"success": False, "error": str(e), "traceback": traceback.format_exc()}), 500
@@ -180,6 +184,8 @@ def list_reports():
         limit = request.args.get('limit', 50, type=int)
         reports = ReportManager.list_reports(simulation_id=simulation_id, limit=limit)
         return jsonify({"success": True, "data": [r.to_dict() for r in reports], "count": len(reports)})
+    except ValueError as e:
+        return jsonify({"success": False, "error": f"Invalid parameters: {str(e)}"}), 400
     except Exception as e:
         logger.error(f"Failed to list reports: {str(e)}")
         return jsonify({"success": False, "error": str(e), "traceback": traceback.format_exc()}), 500
@@ -202,6 +208,8 @@ def download_report(report_id: str):
 
         return send_file(md_path, as_attachment=True, download_name=f"{report_id}.md")
 
+    except ValueError as e:
+        return jsonify({"success": False, "error": f"Invalid report ID: {str(e)}"}), 400
     except Exception as e:
         logger.error(f"Failed to download report: {str(e)}")
         return jsonify({"success": False, "error": str(e), "traceback": traceback.format_exc()}), 500
@@ -214,6 +222,8 @@ def delete_report(report_id: str):
         if not success:
             return jsonify({"success": False, "error": f"Report does not exist: {report_id}"}), 404
         return jsonify({"success": True, "message": f"Report deleted: {report_id}"})
+    except ValueError as e:
+        return jsonify({"success": False, "error": f"Invalid report ID: {str(e)}"}), 400
     except Exception as e:
         logger.error(f"Failed to delete report: {str(e)}")
         return jsonify({"success": False, "error": str(e), "traceback": traceback.format_exc()}), 500
@@ -280,6 +290,8 @@ def chat_with_report_agent():
             }
         })
 
+    except ValueError as e:
+        return jsonify({"success": False, "error": f"Invalid parameter: {str(e)}"}), 400
     except Exception as e:
         logger.error(f"Chat failed: {str(e)}")
         return jsonify({"success": False, "error": str(e), "traceback": traceback.format_exc()}), 500
@@ -294,6 +306,8 @@ def get_report_progress(report_id: str):
         if not progress:
             return jsonify({"success": False, "error": f"Report does not exist or progress info unavailable: {report_id}"}), 404
         return jsonify({"success": True, "data": progress})
+    except ValueError as e:
+        return jsonify({"success": False, "error": f"Invalid report ID: {str(e)}"}), 400
     except Exception as e:
         logger.error(f"Failed to get report progress: {str(e)}")
         return jsonify({"success": False, "error": str(e), "traceback": traceback.format_exc()}), 500
@@ -311,6 +325,8 @@ def get_report_sections(report_id: str):
             "total": len(sections),
             "is_complete": is_complete
         }})
+    except ValueError as e:
+        return jsonify({"success": False, "error": f"Invalid report ID: {str(e)}"}), 400
     except Exception as e:
         logger.error(f"Failed to get section list: {str(e)}")
         return jsonify({"success": False, "error": str(e), "traceback": traceback.format_exc()}), 500
@@ -325,6 +341,8 @@ def get_single_section(report_id: str, section_index: int):
         with open(section_path, 'r', encoding='utf-8') as f:
             content = f.read()
         return jsonify({"success": True, "data": {"filename": f"section_{section_index:02d}.md", "content": content}})
+    except ValueError as e:
+        return jsonify({"success": False, "error": f"Invalid report ID: {str(e)}"}), 400
     except Exception as e:
         logger.error(f"Failed to get section content: {str(e)}")
         return jsonify({"success": False, "error": str(e), "traceback": traceback.format_exc()}), 500
@@ -347,6 +365,8 @@ def check_report_status(simulation_id: str):
             "report_status": report_status,
             "interview_unlocked": interview_unlocked
         }})
+    except ValueError as e:
+        return jsonify({"success": False, "error": f"Invalid simulation ID: {str(e)}"}), 400
     except Exception as e:
         logger.error(f"Failed to check report status: {str(e)}")
         return jsonify({"success": False, "error": str(e), "traceback": traceback.format_exc()}), 500
@@ -362,6 +382,8 @@ def get_agent_log(report_id: str):
             from_line = 0
         log_data = ReportManager.get_agent_log(report_id, from_line=from_line)
         return jsonify({"success": True, "data": log_data})
+    except ValueError as e:
+        return jsonify({"success": False, "error": f"Invalid report ID: {str(e)}"}), 400
     except Exception as e:
         logger.error(f"Failed to get agent log: {str(e)}")
         return jsonify({"success": False, "error": str(e), "traceback": traceback.format_exc()}), 500
@@ -372,6 +394,8 @@ def stream_agent_log(report_id: str):
     try:
         logs = ReportManager.get_agent_log_stream(report_id)
         return jsonify({"success": True, "data": {"logs": logs, "count": len(logs)}})
+    except ValueError as e:
+        return jsonify({"success": False, "error": f"Invalid report ID: {str(e)}"}), 400
     except Exception as e:
         logger.error(f"Failed to get agent log: {str(e)}")
         return jsonify({"success": False, "error": str(e), "traceback": traceback.format_exc()}), 500
@@ -387,6 +411,8 @@ def get_console_log(report_id: str):
             from_line = 0
         log_data = ReportManager.get_console_log(report_id, from_line=from_line)
         return jsonify({"success": True, "data": log_data})
+    except ValueError as e:
+        return jsonify({"success": False, "error": f"Invalid report ID: {str(e)}"}), 400
     except Exception as e:
         logger.error(f"Failed to get console log: {str(e)}")
         return jsonify({"success": False, "error": str(e), "traceback": traceback.format_exc()}), 500
@@ -397,6 +423,8 @@ def stream_console_log(report_id: str):
     try:
         logs = ReportManager.get_console_log_stream(report_id)
         return jsonify({"success": True, "data": {"logs": logs, "count": len(logs)}})
+    except ValueError as e:
+        return jsonify({"success": False, "error": f"Invalid report ID: {str(e)}"}), 400
     except Exception as e:
         logger.error(f"Failed to get console log: {str(e)}")
         return jsonify({"success": False, "error": str(e), "traceback": traceback.format_exc()}), 500

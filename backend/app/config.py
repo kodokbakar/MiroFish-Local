@@ -18,6 +18,15 @@ else:
     load_dotenv(override=True)
 
 
+# Default allowed CORS origins
+DEFAULT_CORS_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+
+
 class Config:
     """Flask configuration class"""
 
@@ -27,6 +36,22 @@ class Config:
 
     # JSON configuration - disable ASCII escaping to display Chinese directly (not as \uXXXX)
     JSON_AS_ASCII = False
+
+    # CORS configuration
+    cors_env = os.environ.get('CORS_ALLOWED_ORIGINS')
+    CORS_ALLOWED_ORIGINS = (
+        [origin.strip() for origin in cors_env.split(',') if origin.strip()]
+        if cors_env
+        else list(DEFAULT_CORS_ORIGINS)
+    )
+
+    @classmethod
+    def get_cors_allowed_origins(cls) -> list[str]:
+        """Return allowed CORS origins from environment or class attribute."""
+        env_origins = os.environ.get('CORS_ALLOWED_ORIGINS')
+        if env_origins:
+            return [origin.strip() for origin in env_origins.split(',') if origin.strip()]
+        return cls.CORS_ALLOWED_ORIGINS
 
     # LLM configuration (unified OpenAI format)
     LLM_API_KEY = os.environ.get('LLM_API_KEY')
