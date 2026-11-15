@@ -5,11 +5,12 @@ Reads nodes from Neo4j graph, filters out meaningful entity type nodes.
 Replaces zep_entity_reader.py — all Zep Cloud calls replaced by GraphStorage.
 """
 
-from typing import Dict, Any, List, Optional, Set
+from collections import defaultdict
 from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Set
 
-from ..utils.logger import get_logger
 from ..storage import GraphStorage
+from ..utils.logger import get_logger
 
 logger = get_logger('mirofish.entity_reader')
 
@@ -91,18 +92,21 @@ class EntityReader:
         logger.info(f"Got {len(nodes)} nodes total")
         return nodes
 
-    def get_all_edges(self, graph_id: str) -> List[Dict[str, Any]]:
+    def get_all_edges(
+        self, graph_id: str, limit: Optional[int] = 2000
+    ) -> List[Dict[str, Any]]:
         """
         Get all edges from the graph.
 
         Args:
             graph_id: Graph ID
+            limit: Maximum number of edges to return.
 
         Returns:
             List of edges.
         """
         logger.info(f"Getting all edges in graph {graph_id}...")
-        edges = self.storage.get_all_edges(graph_id)
+        edges = self.storage.get_all_edges(graph_id, limit=limit)
         logger.info(f"Got {len(edges)} edges total")
         return edges
 
@@ -126,7 +130,8 @@ class EntityReader:
         self,
         graph_id: str,
         defined_entity_types: Optional[List[str]] = None,
-        enrich_with_edges: bool = True
+        enrich_with_edges: bool = True,
+        max_edges: Optional[int] = None,
     ) -> FilteredEntities:
         """
         Filter and extract nodes with meaningful entity types.
@@ -139,6 +144,7 @@ class EntityReader:
             graph_id: Graph ID
             defined_entity_types: Optional list of entity types to filter for. If provided, only entities matching one of these types are kept.
             enrich_with_edges: Whether to fetch each entity's related edge information.
+            max_edges: Optional maximum number of edges to retrieve for enrichment.
 
         Returns:
             FilteredEntities: Filtered entity collection.
@@ -150,10 +156,31 @@ class EntityReader:
         total_count = len(all_nodes)
 
         # Get all edges (for subsequent association lookup)
-        all_edges = self.get_all_edges(graph_id) if enrich_with_edges else []
+        if enrich_with_edges:
+            all_edges = (
+                self.get_all_edges(graph_id, limit=max_edges)
+                if max_edges is not None
+                else self.get_all_edges(graph_id)
+            )
+            if max_edges is not None and len(all_edges) > max_edges:
+                all_edges = all_edges[:max_edges]
+        else:
+            all_edges = []
 
         # Build mapping from node UUID to node data
         node_map = {n["uuid"]: n for n in all_nodes}
+
+        # Pre-index edges by node UUID in single O(|E|) pass for O(1) lookups
+        outgoing_by_node: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        incoming_by_node: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        if enrich_with_edges:
+            for edge in all_edges:
+                src_uuid = edge.get("source_node_uuid") or edge.get("source_id")
+                tgt_uuid = edge.get("target_node_uuid") or edge.get("target_id")
+                if src_uuid:
+                    outgoing_by_node[src_uuid].append(edge)
+                if tgt_uuid:
+                    incoming_by_node[tgt_uuid].append(edge)
 
         # Filter entities matching criteria
         filtered_entities = []
@@ -189,28 +216,34 @@ class EntityReader:
                 attributes=node.get("attributes", {}),
             )
 
-            # Get related edges and nodes
+            # Get related edges and nodes via O(1) lookups
             if enrich_with_edges:
                 related_edges = []
                 related_node_uuids: Set[str] = set()
+                node_uuid = node["uuid"]
 
-                for edge in all_edges:
-                    if edge["source_node_uuid"] == node["uuid"]:
-                        related_edges.append({
-                            "direction": "outgoing",
-                            "edge_name": edge["name"],
-                            "fact": edge.get("fact", ""),
-                            "target_node_uuid": edge["target_node_uuid"],
-                        })
-                        related_node_uuids.add(edge["target_node_uuid"])
-                    elif edge["target_node_uuid"] == node["uuid"]:
+                for edge in outgoing_by_node.get(node_uuid, []):
+                    tgt_uuid = edge.get("target_node_uuid") or edge.get("target_id")
+                    related_edges.append({
+                        "direction": "outgoing",
+                        "edge_name": edge.get("name", ""),
+                        "fact": edge.get("fact", ""),
+                        "target_node_uuid": tgt_uuid,
+                    })
+                    if tgt_uuid:
+                        related_node_uuids.add(tgt_uuid)
+
+                for edge in incoming_by_node.get(node_uuid, []):
+                    src_uuid = edge.get("source_node_uuid") or edge.get("source_id")
+                    if src_uuid != node_uuid:
                         related_edges.append({
                             "direction": "incoming",
-                            "edge_name": edge["name"],
+                            "edge_name": edge.get("name", ""),
                             "fact": edge.get("fact", ""),
-                            "source_node_uuid": edge["source_node_uuid"],
+                            "source_node_uuid": src_uuid,
                         })
-                        related_node_uuids.add(edge["source_node_uuid"])
+                        if src_uuid:
+                            related_node_uuids.add(src_uuid)
 
                 entity.related_edges = related_edges
 
