@@ -63,7 +63,7 @@ export const renderMarkdown = (content) => {
   html = html.replace(/(<br>\s*){2,}/g, '<br>')
   html = html.replace(/(<\/ol>|<\/ul>|<\/blockquote>)<br>(<p|<div)/g, '$1$2')
 
-  const tokens = html.split(/(<ol class="md-ol">(?:<li class="md-oli"[^>]*>[\s\S]*?<\/li>)+<\/ol>)/g)
+  const tokens = html.split(/(<ol class="md-ol">[\s\S]*?<\/ol>)/g)
   let olCounter = 0
   let inSequence = false
   for (let i = 0; i < tokens.length; i++) {
