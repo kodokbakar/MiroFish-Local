@@ -180,13 +180,13 @@ class Neo4jStorage(GraphStorage):
         return False
 
     # ----------------------------------------------------------------
-    # Retry wrapper
+    # Retry and session lifecycle wrappers
     # ----------------------------------------------------------------
 
     def _call_with_retry(self, func, *args, **kwargs):
         """
         Execute a function with retry on Neo4j transient errors.
-        Replaces 3 different retry patterns from the Zep codebase.
+        Kept for backward compatibility with external callers and tests.
         """
         last_error = None
         for attempt in range(self.MAX_RETRIES):
@@ -205,6 +205,28 @@ class Neo4jStorage(GraphStorage):
                 raise
 
         raise last_error  # type: ignore
+
+    def _run_in_session(self, access_mode: str, work_fn: Callable, *args, **kwargs):
+        """
+        Execute work_fn within a Neo4j session using access_mode ('read' or 'write').
+        Acquires a fresh session per retry attempt to avoid reusing closed/invalidated sessions
+        when transient errors (SessionExpired, ServiceUnavailable, TransientError) occur.
+        """
+        def _attempt():
+            with self._driver.session() as session:
+                if access_mode == "read":
+                    return session.execute_read(work_fn, *args, **kwargs)
+                return session.execute_write(work_fn, *args, **kwargs)
+
+        return self._call_with_retry(_attempt)
+
+    def _execute_read(self, work_fn: Callable, *args, **kwargs):
+        """Execute read transaction with retry and fresh session per attempt."""
+        return self._run_in_session("read", work_fn, *args, **kwargs)
+
+    def _execute_write(self, work_fn: Callable, *args, **kwargs):
+        """Execute write transaction with retry and fresh session per attempt."""
+        return self._run_in_session("write", work_fn, *args, **kwargs)
 
     # ----------------------------------------------------------------
     # Graph lifecycle
@@ -231,8 +253,7 @@ class Neo4jStorage(GraphStorage):
                 created_at=now,
             )
 
-        with self._driver.session() as session:
-            self._call_with_retry(session.execute_write, _create)
+        self._execute_write(_create)
 
         logger.info(f"Created graph '{name}' with id {graph_id}")
         return graph_id
@@ -244,32 +265,31 @@ class Neo4jStorage(GraphStorage):
         Explicitly targets labelled nodes (:Entity, :Episode) using graph_id indexed lookups
         to prevent expensive AllNodesScan.
         """
-        with self._driver.session() as session:
-            for label in ("Entity", "Episode"):
-                query = (
-                    f"MATCH (n:{label} {{graph_id: $gid}}) "
-                    f"WITH n LIMIT $batch_size "
-                    f"DETACH DELETE n "
-                    f"RETURN count(*) AS deleted"
-                )
-                while True:
-                    def _delete_batch(tx, q=query):
-                        res = tx.run(q, gid=graph_id, batch_size=batch_size)
-                        rec = res.single()
-                        return rec.get("deleted", 0) if rec else 0
+        for label in ("Entity", "Episode"):
+            query = (
+                f"MATCH (n:{label} {{graph_id: $gid}}) "
+                f"WITH n LIMIT $batch_size "
+                f"DETACH DELETE n "
+                f"RETURN count(*) AS deleted"
+            )
+            while True:
+                def _delete_batch(tx, q=query):
+                    res = tx.run(q, gid=graph_id, batch_size=batch_size)
+                    rec = res.single()
+                    return rec.get("deleted", 0) if rec else 0
 
-                    deleted_count = self._call_with_retry(session.execute_write, _delete_batch)
-                    if not deleted_count or deleted_count == 0:
-                        break
+                deleted_count = self._execute_write(_delete_batch)
+                if not deleted_count or deleted_count == 0:
+                    break
 
-            # Delete graph node
-            def _delete_graph_node(tx):
-                tx.run(
-                    "MATCH (g:Graph {graph_id: $gid}) DETACH DELETE g",
-                    gid=graph_id,
-                )
+        # Delete graph node
+        def _delete_graph_node(tx):
+            tx.run(
+                "MATCH (g:Graph {graph_id: $gid}) DETACH DELETE g",
+                gid=graph_id,
+            )
 
-            self._call_with_retry(session.execute_write, _delete_graph_node)
+        self._execute_write(_delete_graph_node)
         logger.info(f"Deleted graph {graph_id}")
 
     def set_ontology(self, graph_id: str, ontology: Dict[str, Any]) -> None:
@@ -283,8 +303,7 @@ class Neo4jStorage(GraphStorage):
                 ontology_json=json.dumps(ontology, ensure_ascii=False),
             )
 
-        with self._driver.session() as session:
-            self._call_with_retry(session.execute_write, _set)
+        self._execute_write(_set)
 
     def get_ontology(self, graph_id: str) -> Dict[str, Any]:
         with self._driver.session() as session:
@@ -421,7 +440,7 @@ class Neo4jStorage(GraphStorage):
                 except Exception as e:
                     logger.warning(f"Failed to add label '{etype}' to '{item['name']}': {e}")
 
-        with self._get_write_lock(graph_id), self._driver.session() as session:
+        with self._get_write_lock(graph_id):
             def _persist_chunk(tx):
                 # 1. Create episode node
                 tx.run(
@@ -644,7 +663,7 @@ class Neo4jStorage(GraphStorage):
                             round_num=round_num,
                         )
 
-            self._call_with_retry(session.execute_write, _persist_chunk)
+            self._execute_write(_persist_chunk)
 
         logger.info(
             "[add_text] Chunk done: episode=%s embed=%.3fs write=%.3fs",
@@ -755,7 +774,7 @@ class Neo4jStorage(GraphStorage):
         entities_data.sort(key=lambda x: x["name_lower"])
         relations_list.sort(key=lambda x: (x["source_lower"], x["target_lower"], x["name"]))
 
-        with self._get_write_lock(graph_id), self._driver.session() as session:
+        with self._get_write_lock(graph_id):
             def _write_activities(tx):
                 # 1. Episode node
                 tx.run(
@@ -827,7 +846,7 @@ class Neo4jStorage(GraphStorage):
                         round_num=round_num,
                     )
 
-            self._call_with_retry(session.execute_write, _write_activities)
+            self._execute_write(_write_activities)
 
         logger.info(
             f"[fast_path] Ingested {len(activities)} activities into graph {graph_id} (episode={episode_id})"
@@ -900,8 +919,7 @@ class Neo4jStorage(GraphStorage):
             )
             return [self._node_to_dict(record["n"], record["labels"]) for record in result]
 
-        with self._driver.session() as session:
-            return self._call_with_retry(session.execute_read, _read)
+        return self._execute_read(_read)
 
     def get_node(self, uuid: str) -> Optional[Dict[str, Any]]:
         def _read(tx):
@@ -914,8 +932,7 @@ class Neo4jStorage(GraphStorage):
                 return self._node_to_dict(record["n"], record["labels"])
             return None
 
-        with self._driver.session() as session:
-            return self._call_with_retry(session.execute_read, _read)
+        return self._execute_read(_read)
 
     def get_nodes_by_uuids(self, uuids: List[str]) -> List[Dict[str, Any]]:
         """Batch retrieval of nodes by UUIDs in a single Cypher query."""
@@ -937,8 +954,7 @@ class Neo4jStorage(GraphStorage):
             )
             return [self._node_to_dict(record["n"], record["labels"]) for record in result]
 
-        with self._driver.session() as session:
-            return self._call_with_retry(session.execute_read, _read)
+        return self._execute_read(_read)
 
     def get_node_edges(self, node_uuid: str) -> List[Dict[str, Any]]:
         """O(1) Cypher — NOT full scan + filter like the old Zep code."""
@@ -955,8 +971,7 @@ class Neo4jStorage(GraphStorage):
                 for record in result
             ]
 
-        with self._driver.session() as session:
-            return self._call_with_retry(session.execute_read, _read)
+        return self._execute_read(_read)
 
     def get_nodes_by_label(self, graph_id: str, label: str) -> List[Dict[str, Any]]:
         validate_label(label)
@@ -970,8 +985,7 @@ class Neo4jStorage(GraphStorage):
             result = tx.run(query, gid=graph_id)
             return [self._node_to_dict(record["n"], record["labels"]) for record in result]
 
-        with self._driver.session() as session:
-            return self._call_with_retry(session.execute_read, _read)
+        return self._execute_read(_read)
 
     # ----------------------------------------------------------------
     # Read edges
@@ -996,8 +1010,7 @@ class Neo4jStorage(GraphStorage):
                 for record in result
             ]
 
-        with self._driver.session() as session:
-            return self._call_with_retry(session.execute_read, _read)
+        return self._execute_read(_read)
 
     # ----------------------------------------------------------------
     # Search
@@ -1072,8 +1085,7 @@ class Neo4jStorage(GraphStorage):
                 "entity_types": entity_types,
             }
 
-        with self._driver.session() as session:
-            return self._call_with_retry(session.execute_read, _read)
+        return self._execute_read(_read)
 
     def get_graph_data(
         self, graph_id: str, include_embeddings: bool = False
@@ -1159,8 +1171,7 @@ class Neo4jStorage(GraphStorage):
                 "edge_count": len(edges),
             }
 
-        with self._driver.session() as session:
-            return self._call_with_retry(session.execute_read, _read)
+        return self._execute_read(_read)
 
     def get_graph_timeline(
         self, simulation_id: str, graph_id: Optional[str] = None
@@ -1250,8 +1261,7 @@ class Neo4jStorage(GraphStorage):
                 "rounds": rounds_list,
             }
 
-        with self._driver.session() as session:
-            return self._call_with_retry(session.execute_read, _read)
+        return self._execute_read(_read)
 
     def detect_communities(
         self, graph_id: str, algorithm: str = "louvain"
@@ -1274,8 +1284,7 @@ class Neo4jStorage(GraphStorage):
             return res.single() is not None
 
         try:
-            with self._driver.session() as session:
-                return self._call_with_retry(session.execute_read, _read)
+            return self._execute_read(_read)
         except Exception:
             return False
 
@@ -1319,8 +1328,7 @@ class Neo4jStorage(GraphStorage):
             ]
             return nodes, edges
 
-        with self._driver.session() as session:
-            nodes, edges = self._call_with_retry(session.execute_read, _fetch_graph_data)
+        nodes, edges = self._execute_read(_fetch_graph_data)
 
         if not nodes:
             return {"communities": [], "total_communities": 0, "total_nodes": 0}
@@ -1383,8 +1391,7 @@ class Neo4jStorage(GraphStorage):
                     gid=graph_id,
                 )
 
-            with self._driver.session() as session:
-                self._call_with_retry(session.execute_write, _persist)
+            self._execute_write(_persist)
 
         return {
             "communities": communities_summary,
