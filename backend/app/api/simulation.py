@@ -1717,10 +1717,12 @@ def start_simulation():
         })
         
     except ValueError as e:
+        err_msg = str(e)
+        status_code = 409 if "already running" in err_msg.lower() or "already starting" in err_msg.lower() else 400
         return jsonify({
             "success": False,
-            "error": str(e)
-        }), 400
+            "error": err_msg
+        }), status_code
         
     except Exception as e:
         logger.error(f"Failed to start simulation: {str(e)}")
