@@ -238,6 +238,18 @@ class SimulationRunner:
     # In-memory last saved state for dirty checking and lock for atomic save
     _last_saved_state: Dict[str, Dict[str, Any]] = {}
     _state_save_lock: threading.Lock = threading.Lock()
+
+    # Per-simulation lock registry to synchronize start and prevent TOCTOU race
+    _simulation_locks: Dict[str, threading.RLock] = {}
+    _registry_lock: threading.Lock = threading.Lock()
+
+    @classmethod
+    def _get_simulation_lock(cls, simulation_id: str) -> threading.RLock:
+        """Get or create per-simulation reentrant lock."""
+        with cls._registry_lock:
+            if simulation_id not in cls._simulation_locks:
+                cls._simulation_locks[simulation_id] = threading.RLock()
+            return cls._simulation_locks[simulation_id]
     
     # Graph memory update configuration
     _graph_memory_enabled: Dict[str, bool] = {}  # simulation_id -> enabled
@@ -369,188 +381,192 @@ class SimulationRunner:
         Returns:
             SimulationRunState
         """
-        # Check if already running
-        existing = cls.get_run_state(simulation_id)
-        is_alive = cls.is_process_alive(simulation_id, existing)
-        if existing and existing.runner_status in [RunnerStatus.RUNNING, RunnerStatus.STARTING] and is_alive:
-            raise ValueError(f"Simulation already running: {simulation_id}")
-        elif is_alive:
-            logger.warning(f"Terminating lingering process for simulation {simulation_id} before starting")
-            try:
-                cls.stop_simulation(simulation_id)
-            except Exception as e:
-                logger.warning(f"Error stopping lingering simulation {simulation_id}: {e}")
-        # Wait for any previous monitor thread to exit before starting anew
-        existing_thread = cls._monitor_threads.get(simulation_id)
-        if existing_thread and existing_thread.is_alive() and existing_thread != threading.current_thread():
-            logger.info(f"Waiting for previous monitor thread to exit: {simulation_id}")
-            existing_thread.join(timeout=5.0)
-            if not existing_thread.is_alive() and cls._monitor_threads.get(simulation_id) is existing_thread:
-                cls._monitor_threads.pop(simulation_id, None)
-        # Load simulation config
-        sim_dir = os.path.join(cls.RUN_STATE_DIR, simulation_id)
-        config_path = os.path.join(sim_dir, "simulation_config.json")
-        
-        if not os.path.exists(config_path):
-            raise ValueError(f"Simulation config does not exist, call /prepare endpoint first")
-        
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = json.load(f)
-        
-        # Initialize run state
-        time_config = config.get("time_config", {})
-        total_hours = time_config.get("total_simulation_hours", 72)
-        minutes_per_round = time_config.get("minutes_per_round", 30)
-        total_rounds = int(total_hours * 60 / minutes_per_round)
-        
-        # If max_rounds specified, truncate
-        if max_rounds is not None and max_rounds > 0:
-            original_rounds = total_rounds
-            total_rounds = min(total_rounds, max_rounds)
-            if total_rounds < original_rounds:
-                logger.info(f"Rounds truncated: {original_rounds} -> {total_rounds} (max_rounds={max_rounds})")
-        
-        state = SimulationRunState(
-            simulation_id=simulation_id,
-            runner_status=RunnerStatus.STARTING,
-            total_rounds=total_rounds,
-            total_simulation_hours=total_hours,
-            started_at=datetime.now().isoformat(),
-        )
-
-        with cls._action_cache_lock:
-            cls._action_cache[simulation_id] = []
-        with cls._state_save_lock:
-            cls._last_saved_state.pop(simulation_id, None)
-
-        cls._save_run_state(state)
-        
-        # If graph memory update enabled, create updater
-        if enable_graph_memory_update:
-            if not graph_id:
-                raise ValueError("Must provide graph_id when enabling graph memory update")
-            
-            if not storage:
-                raise ValueError("Must provide storage (GraphStorage) when enabling graph memory update")
-            
-            try:
-                GraphMemoryManager.create_updater(simulation_id, graph_id, storage)
-                cls._graph_memory_enabled[simulation_id] = True
-                logger.info(f"Graph memory update enabled: simulation_id={simulation_id}, graph_id={graph_id}")
-            except Exception as e:
-                logger.error(f"Failed to create graph memory updater: {e}")
-                cls._graph_memory_enabled[simulation_id] = False
-        else:
-            cls._graph_memory_enabled[simulation_id] = False
-        
-        # Determine which script to run (scripts located in backend/scripts/ directory)
-        if platform == "twitter":
-            script_name = "run_twitter_simulation.py"
-            state.twitter_running = True
-        elif platform == "reddit":
-            script_name = "run_reddit_simulation.py"
-            state.reddit_running = True
-        else:
-            script_name = "run_parallel_simulation.py"
-            state.twitter_running = True
-            state.reddit_running = True
-        
-        script_path = os.path.join(cls.SCRIPTS_DIR, script_name)
-        
-        if not os.path.exists(script_path):
-            raise ValueError(f"Script does not exist: {script_path}")
-        
-        # Create action queue
-        action_queue = Queue()
-        cls._action_queues[simulation_id] = action_queue
-        
-        # Start simulation process
-        try:
-            # Build run command with full paths
-            # New log structure:
-            #   twitter/actions.jsonl - Twitter action log
-            #   reddit/actions.jsonl  - Reddit action log
-            #   simulation.log        - Main process log
-            
-            cmd = [
-                sys.executable,  # Python interpreter
-                script_path,
-                "--config", config_path,  # Use full config file path
-            ]
-            
-            # If max_rounds specified, add to command-line arguments
-            if max_rounds is not None and max_rounds > 0:
-                cmd.extend(["--max-rounds", str(max_rounds)])
-            
-            # Create main log file to avoid stdout/stderr pipe buffer overflow
-            main_log_path = os.path.join(sim_dir, "simulation.log")
-            main_log_file = open(main_log_path, 'w', encoding='utf-8')
-            
-            # Set subprocess environment variables to ensure UTF-8 encoding on Windows
-            # This fixes third-party libraries (like OASIS) not specifying encoding when reading files
-            env = os.environ.copy()
-            env['PYTHONUTF8'] = '1'  # Python 3.7+ support, make all open() use UTF-8 by default
-            env['PYTHONIOENCODING'] = 'utf-8'  # Ensure stdout/stderr use UTF-8
-            
-            # Set working directory to simulation directory (database files etc. will be generated here)
-            # Use start_new_session=True to create new process group, ensuring all child processes can be terminated via os.killpg
-            # Terminate any existing process handle in cls._processes[simulation_id] if alive
-            old_proc = cls._processes.get(simulation_id)
-            if old_proc and old_proc.poll() is None:
-                logger.warning(f"Terminating existing process handle before Popen: {simulation_id}")
+        lock = cls._get_simulation_lock(simulation_id)
+        with lock:
+            # Check if already running or starting
+            existing = cls.get_run_state(simulation_id)
+            if existing and existing.runner_status == RunnerStatus.STARTING:
+                raise ValueError("Simulation is already starting")
+            is_alive = cls.is_process_alive(simulation_id, existing)
+            if existing and existing.runner_status == RunnerStatus.RUNNING and is_alive:
+                raise ValueError("Simulation is already running")
+            elif is_alive:
+                logger.warning(f"Terminating lingering process for simulation {simulation_id} before starting")
                 try:
-                    cls._terminate_process(old_proc, simulation_id)
+                    cls.stop_simulation(simulation_id)
                 except Exception as e:
-                    logger.warning(f"Error terminating existing process handle: {e}")
+                    logger.warning(f"Error stopping lingering simulation {simulation_id}: {e}")
+            # Wait for any previous monitor thread to exit before starting anew
             existing_thread = cls._monitor_threads.get(simulation_id)
             if existing_thread and existing_thread.is_alive() and existing_thread != threading.current_thread():
+                logger.info(f"Waiting for previous monitor thread to exit: {simulation_id}")
                 existing_thread.join(timeout=5.0)
                 if not existing_thread.is_alive() and cls._monitor_threads.get(simulation_id) is existing_thread:
                     cls._monitor_threads.pop(simulation_id, None)
-
-            popen_kwargs = dict(
-                cwd=sim_dir,
-                stdout=main_log_file,
-                stderr=subprocess.STDOUT,  # stderr also written to same file
-                text=True,
-                encoding='utf-8',  # Explicitly specify encoding
-                bufsize=1,
-                env=env,  # Pass environment variables with UTF-8 settings
-                **cls._get_process_group_kwargs(),
+            # Load simulation config
+            sim_dir = os.path.join(cls.RUN_STATE_DIR, simulation_id)
+            config_path = os.path.join(sim_dir, "simulation_config.json")
+            
+            if not os.path.exists(config_path):
+                raise ValueError(f"Simulation config does not exist, call /prepare endpoint first")
+            
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+            
+            # Initialize run state
+            time_config = config.get("time_config", {})
+            total_hours = time_config.get("total_simulation_hours", 72)
+            minutes_per_round = time_config.get("minutes_per_round", 30)
+            total_rounds = int(total_hours * 60 / minutes_per_round)
+            
+            # If max_rounds specified, truncate
+            if max_rounds is not None and max_rounds > 0:
+                original_rounds = total_rounds
+                total_rounds = min(total_rounds, max_rounds)
+                if total_rounds < original_rounds:
+                    logger.info(f"Rounds truncated: {original_rounds} -> {total_rounds} (max_rounds={max_rounds})")
+            
+            state = SimulationRunState(
+                simulation_id=simulation_id,
+                runner_status=RunnerStatus.STARTING,
+                total_rounds=total_rounds,
+                total_simulation_hours=total_hours,
+                started_at=datetime.now().isoformat(),
             )
 
-            process = subprocess.Popen(
-                cmd,
-                **popen_kwargs,
-            )
-            
-            # Save file handle for later closing
-            cls._stdout_files[simulation_id] = main_log_file
-            cls._stderr_files[simulation_id] = None  # No longer need separate stderr
-            
-            state.process_pid = process.pid
-            state.runner_status = RunnerStatus.RUNNING
-            cls._processes[simulation_id] = process
+            with cls._action_cache_lock:
+                cls._action_cache[simulation_id] = []
+            with cls._state_save_lock:
+                cls._last_saved_state.pop(simulation_id, None)
+
             cls._save_run_state(state)
             
-            # Start monitoring thread
-            monitor_thread = threading.Thread(
-                target=cls._monitor_simulation,
-                args=(simulation_id,),
-                daemon=True
-            )
-            monitor_thread.start()
-            cls._monitor_threads[simulation_id] = monitor_thread
+            # If graph memory update enabled, create updater
+            if enable_graph_memory_update:
+                if not graph_id:
+                    raise ValueError("Must provide graph_id when enabling graph memory update")
+                
+                if not storage:
+                    raise ValueError("Must provide storage (GraphStorage) when enabling graph memory update")
+                
+                try:
+                    GraphMemoryManager.create_updater(simulation_id, graph_id, storage)
+                    cls._graph_memory_enabled[simulation_id] = True
+                    logger.info(f"Graph memory update enabled: simulation_id={simulation_id}, graph_id={graph_id}")
+                except Exception as e:
+                    logger.error(f"Failed to create graph memory updater: {e}")
+                    cls._graph_memory_enabled[simulation_id] = False
+            else:
+                cls._graph_memory_enabled[simulation_id] = False
             
-            logger.info(f"Simulation started successfully: {simulation_id}, pid={process.pid}, platform={platform}")
+            # Determine which script to run (scripts located in backend/scripts/ directory)
+            if platform == "twitter":
+                script_name = "run_twitter_simulation.py"
+                state.twitter_running = True
+            elif platform == "reddit":
+                script_name = "run_reddit_simulation.py"
+                state.reddit_running = True
+            else:
+                script_name = "run_parallel_simulation.py"
+                state.twitter_running = True
+                state.reddit_running = True
             
-        except Exception as e:
-            state.runner_status = RunnerStatus.FAILED
-            state.error = str(e)
-            cls._save_run_state(state)
-            raise
-        
-        return state
+            script_path = os.path.join(cls.SCRIPTS_DIR, script_name)
+            
+            if not os.path.exists(script_path):
+                raise ValueError(f"Script does not exist: {script_path}")
+            
+            # Create action queue
+            action_queue = Queue()
+            cls._action_queues[simulation_id] = action_queue
+            
+            # Start simulation process
+            try:
+                # Build run command with full paths
+                # New log structure:
+                #   twitter/actions.jsonl - Twitter action log
+                #   reddit/actions.jsonl  - Reddit action log
+                #   simulation.log        - Main process log
+                
+                cmd = [
+                    sys.executable,  # Python interpreter
+                    script_path,
+                    "--config", config_path,  # Use full config file path
+                ]
+                
+                # If max_rounds specified, add to command-line arguments
+                if max_rounds is not None and max_rounds > 0:
+                    cmd.extend(["--max-rounds", str(max_rounds)])
+                
+                # Create main log file to avoid stdout/stderr pipe buffer overflow
+                main_log_path = os.path.join(sim_dir, "simulation.log")
+                main_log_file = open(main_log_path, 'w', encoding='utf-8')
+                
+                # Set subprocess environment variables to ensure UTF-8 encoding on Windows
+                # This fixes third-party libraries (like OASIS) not specifying encoding when reading files
+                env = os.environ.copy()
+                env['PYTHONUTF8'] = '1'  # Python 3.7+ support, make all open() use UTF-8 by default
+                env['PYTHONIOENCODING'] = 'utf-8'  # Ensure stdout/stderr use UTF-8
+                
+                # Set working directory to simulation directory (database files etc. will be generated here)
+                # Use start_new_session=True to create new process group, ensuring all child processes can be terminated via os.killpg
+                # Terminate any existing process handle in cls._processes[simulation_id] if alive
+                old_proc = cls._processes.get(simulation_id)
+                if old_proc and old_proc.poll() is None:
+                    logger.warning(f"Terminating existing process handle before Popen: {simulation_id}")
+                    try:
+                        cls._terminate_process(old_proc, simulation_id)
+                    except Exception as e:
+                        logger.warning(f"Error terminating existing process handle: {e}")
+                existing_thread = cls._monitor_threads.get(simulation_id)
+                if existing_thread and existing_thread.is_alive() and existing_thread != threading.current_thread():
+                    existing_thread.join(timeout=5.0)
+                    if not existing_thread.is_alive() and cls._monitor_threads.get(simulation_id) is existing_thread:
+                        cls._monitor_threads.pop(simulation_id, None)
+
+                popen_kwargs = dict(
+                    cwd=sim_dir,
+                    stdout=main_log_file,
+                    stderr=subprocess.STDOUT,  # stderr also written to same file
+                    text=True,
+                    encoding='utf-8',  # Explicitly specify encoding
+                    bufsize=1,
+                    env=env,  # Pass environment variables with UTF-8 settings
+                    **cls._get_process_group_kwargs(),
+                )
+
+                process = subprocess.Popen(
+                    cmd,
+                    **popen_kwargs,
+                )
+                
+                # Save file handle for later closing
+                cls._stdout_files[simulation_id] = main_log_file
+                cls._stderr_files[simulation_id] = None  # No longer need separate stderr
+                
+                state.process_pid = process.pid
+                state.runner_status = RunnerStatus.RUNNING
+                cls._processes[simulation_id] = process
+                cls._save_run_state(state)
+                
+                # Start monitoring thread
+                monitor_thread = threading.Thread(
+                    target=cls._monitor_simulation,
+                    args=(simulation_id,),
+                    daemon=True
+                )
+                monitor_thread.start()
+                cls._monitor_threads[simulation_id] = monitor_thread
+                
+                logger.info(f"Simulation started successfully: {simulation_id}, pid={process.pid}, platform={platform}")
+                
+            except Exception as e:
+                state.runner_status = RunnerStatus.FAILED
+                state.error = str(e)
+                cls._save_run_state(state)
+                raise
+            
+            return state
     
     @classmethod
     def _monitor_simulation(cls, simulation_id: str):
