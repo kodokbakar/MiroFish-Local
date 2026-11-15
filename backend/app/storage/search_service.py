@@ -156,6 +156,7 @@ class SearchService:
         graph_id: str,
         query: str,
         limit: int = 10,
+        query_vector: Optional[List[float]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Search edges (facts/relations) using hybrid scoring.
@@ -166,7 +167,8 @@ class SearchService:
         if not query_text:
             vector_results = []
         else:
-            query_vector = self.embedding.embed(query)
+            if query_vector is None:
+                query_vector = self.embedding.embed(query)
             # Vector search with candidate oversampling to prevent cross-graph starvation
             candidate_limit = max(limit * 10, 100)
             vector_results = self._run_edge_vector_search(
@@ -190,6 +192,7 @@ class SearchService:
         graph_id: str,
         query: str,
         limit: int = 10,
+        query_vector: Optional[List[float]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Search nodes (entities) using hybrid scoring.
@@ -200,7 +203,8 @@ class SearchService:
         if not query_text:
             vector_results = []
         else:
-            query_vector = self.embedding.embed(query)
+            if query_vector is None:
+                query_vector = self.embedding.embed(query)
             candidate_limit = max(limit * 10, 100)
             vector_results = self._run_node_vector_search(
                 session, graph_id, query_vector, limit=limit, candidate_limit=candidate_limit
