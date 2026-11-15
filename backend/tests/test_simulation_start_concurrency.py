@@ -260,3 +260,140 @@ def test_api_concurrent_start_rejects_duplicate_and_spawns_single_process(app_cl
     error_codes = [code for code in status_codes if code != 200]
     assert len(error_codes) == 1, f"Expected exactly one error response, got {status_codes}"
     assert error_codes[0] in [400, 409], f"Unexpected error status: {error_codes[0]}"
+
+
+def test_high_concurrency_start_simulation_single_winner(clean_simulation_runner):
+    """
+    High concurrency edge-case: 5 concurrent threads calling start_simulation()
+    on the same simulation ID; verify exactly 1 succeeds and 4 raise ValueError.
+    """
+    sim_id = "sim_high_concurrency_5_threads"
+    _setup_simulation_dir(clean_simulation_runner, sim_id)
+
+    barrier = threading.Barrier(5)
+    results = []
+    errors = []
+    results_lock = threading.Lock()
+
+    def fake_popen(*args, **kwargs):
+        proc = MagicMock()
+        proc.pid = 33001
+        proc.poll.return_value = None
+        proc.returncode = None
+        time.sleep(0.02)
+        return proc
+
+    def worker():
+        barrier.wait()
+        try:
+            res = SimulationRunner.start_simulation(sim_id, platform="twitter")
+            with results_lock:
+                results.append(res)
+        except Exception as e:  # noqa: BLE001
+            with results_lock:
+                errors.append(e)
+
+    with patch("subprocess.Popen", side_effect=fake_popen) as mock_popen, \
+         patch.object(SimulationRunner, "_monitor_simulation"):
+        threads = [threading.Thread(target=worker) for _ in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+    assert mock_popen.call_count == 1, (
+        f"Expected exactly 1 subprocess spawned for 5 concurrent threads, got {mock_popen.call_count}"
+    )
+    assert len(results) == 1, f"Expected exactly 1 successful start, got {len(results)}"
+    assert len(errors) == 4, f"Expected exactly 4 failed starts, got {len(errors)}"
+    for err in errors:
+        assert isinstance(err, ValueError)
+        assert "already running" in str(err).lower() or "already starting" in str(err).lower()
+
+
+def test_per_simulation_lock_isolation(clean_simulation_runner):
+    """
+    Per-simulation lock isolation: concurrent start_simulation() on two DIFFERENT
+    simulation IDs do not block each other and both spawn their respective subprocess.
+    """
+    sim_a = "sim_isolation_a"
+    sim_b = "sim_isolation_b"
+    _setup_simulation_dir(clean_simulation_runner, sim_a)
+    _setup_simulation_dir(clean_simulation_runner, sim_b)
+
+    barrier = threading.Barrier(2)
+    spawned_sims = []
+    spawn_lock = threading.Lock()
+
+    def fake_popen(*args, **kwargs):
+        proc = MagicMock()
+        proc.pid = 44001
+        proc.poll.return_value = None
+        proc.returncode = None
+        cwd = kwargs.get("cwd", "")
+        with spawn_lock:
+            if sim_a in cwd:
+                spawned_sims.append(sim_a)
+            elif sim_b in cwd:
+                spawned_sims.append(sim_b)
+        time.sleep(0.02)
+        return proc
+
+    results = {}
+    errors = {}
+
+    def worker(sim_id):
+        barrier.wait()
+        try:
+            res = SimulationRunner.start_simulation(sim_id, platform="twitter")
+            results[sim_id] = res
+        except Exception as e:  # noqa: BLE001
+            errors[sim_id] = e
+
+    with patch("subprocess.Popen", side_effect=fake_popen) as mock_popen, \
+         patch.object(SimulationRunner, "_monitor_simulation"):
+        t1 = threading.Thread(target=worker, args=(sim_a,))
+        t2 = threading.Thread(target=worker, args=(sim_b,))
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+    assert len(errors) == 0, f"Expected no errors for different simulation IDs, got {errors}"
+    assert len(results) == 2, f"Expected both simulations to succeed, got {len(results)}"
+    assert mock_popen.call_count == 2, f"Expected 2 subprocesses spawned, got {mock_popen.call_count}"
+    assert set(spawned_sims) == {sim_a, sim_b}
+
+
+def test_error_recovery_when_subprocess_launch_fails(clean_simulation_runner):
+    """
+    Error recovery: if subprocess launch throws an exception during spawn,
+    ensure the lock is properly released and state allows subsequent retry
+    without remaining stuck in STARTING.
+    """
+    sim_id = "sim_error_recovery"
+    _setup_simulation_dir(clean_simulation_runner, sim_id)
+
+    # 1. First start attempt fails during subprocess.Popen
+    with patch("subprocess.Popen", side_effect=OSError("Exec format error")), \
+         patch.object(SimulationRunner, "_monitor_simulation"), \
+         pytest.raises(OSError, match="Exec format error"):
+        SimulationRunner.start_simulation(sim_id, platform="twitter")
+
+    # Verify state was marked FAILED, not stuck in STARTING
+    failed_state = SimulationRunner.get_run_state(sim_id)
+    assert failed_state is not None
+    assert failed_state.runner_status == RunnerStatus.FAILED
+    assert "Exec format error" in failed_state.error
+
+    # Verify lock is not held and second start attempt succeeds
+    mock_proc = MagicMock()
+    mock_proc.pid = 55001
+    mock_proc.poll.return_value = None
+
+    with patch("subprocess.Popen", return_value=mock_proc) as mock_popen, \
+         patch.object(SimulationRunner, "_monitor_simulation"):
+        recovered_state = SimulationRunner.start_simulation(sim_id, platform="twitter")
+        assert recovered_state.runner_status == RunnerStatus.RUNNING
+        assert recovered_state.process_pid == 55001
+        assert mock_popen.call_count == 1
