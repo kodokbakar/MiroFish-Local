@@ -91,6 +91,9 @@ Only the orchestrator edits this file.
 | 072 | - | Issue #95: eliminate exponential ReDoS catastrophic backtracking in markdown list parser | bugfix | direct | low | pending | PR #114 (`port/072`) | Replace nested quantifier in ordered list regex with linear non-backtracking pattern; reviewer APPROVE, tester PASS, 41 frontend tests pass. |
 | 073 | - | Issue #96: optimize entity reader and bound graph edge queries to eliminate O(|V|*|E|) CPU starvation | bugfix | adapt | medium | pending | PR #116 (`port/073`) | Add safe query limits on get_all_edges and index edges in memory for O(|V|+|E|) filtering; reviewer APPROVE, tester PASS, 11 backend tests pass. |
 | 074 | - | Issue #97: batch graph deletion to prevent JVM heap exhaustion and add labels to delete queries | bugfix | adapt | medium | pending | PR #115 (`port/074`) | Add explicit node labels and batched transactions to graph deletion queries; reviewer APPROVE, tester PASS, 7 backend tests pass. |
+| 075 | - | Issue #98: fix session lifecycle in Neo4j driver retry loop to recover from transient failures | bugfix | adapt | medium | pending | `port/075` | Acquire fresh session inside retry loop to prevent ClientError on expired sessions. |
+| 076 | - | Issue #99: enforce uniqueness constraint on Entity (graph_id, name_lower) to prevent duplicate nodes | bugfix | adapt | medium | pending | `port/076` | Replace index with composite uniqueness constraint on Entity (graph_id, name_lower). |
+| 077 | - | Issue #100: clean shutdown and buffer lock release in GraphMemoryUpdater to prevent thread leaks | bugfix | direct | low | pending | `port/077` | Move I/O outside buffer lock and use sentinel termination to prevent thread leaks. |
 
 ## Skipped (with reason)
 | Upstream commit | Reason |
