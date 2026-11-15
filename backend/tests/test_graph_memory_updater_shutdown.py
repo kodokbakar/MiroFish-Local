@@ -98,3 +98,98 @@ def test_stop_cleanly_halts_worker_without_lock_contention_or_thread_leak():
 
     assert not updater._worker_thread.is_alive(), "Worker thread leaked or remained alive after stop()"
     assert buffer_lock_acquired, "_buffer_lock was held during slow I/O, causing contention"
+
+
+def test_rapid_start_stop_cycles():
+    """Verify repeatedly starting and stopping GraphMemoryUpdater does not leak threads or hang."""
+    storage = MagicMock()
+    threads_before = threading.active_count()
+
+    for i in range(10):
+        updater = GraphMemoryUpdater(graph_id=f"test_rapid_{i}", storage=storage)
+        updater.start()
+        updater.stop()
+        assert updater._worker_thread is not None
+        assert not updater._worker_thread.is_alive()
+
+    # Small pause to allow thread termination cleanup in runtime
+    time.sleep(0.05)
+    threads_after = threading.active_count()
+    assert threads_after <= threads_before + 1
+
+
+def test_stop_idempotent():
+    """Verify calling stop() multiple times does not throw exceptions or corrupt state."""
+    storage = MagicMock()
+    updater = GraphMemoryUpdater(graph_id="test_idempotent", storage=storage)
+    updater.start()
+
+    # First stop
+    updater.stop()
+    assert not updater._running
+    assert not updater._worker_thread.is_alive()
+
+    # Second stop
+    updater.stop()
+    assert not updater._running
+
+    # Also test stop() on an updater that was never started
+    unstarted = GraphMemoryUpdater(graph_id="test_unstarted", storage=storage)
+    unstarted.stop()
+    assert not unstarted._running
+
+
+def test_empty_queue_shutdown_fast():
+    """Verify stopping an idle updater exits promptly without waiting for queue timeout."""
+    storage = MagicMock()
+    updater = GraphMemoryUpdater(graph_id="test_fast_shutdown", storage=storage)
+    updater.start()
+
+    start_time = time.monotonic()
+    updater.stop()
+    duration = time.monotonic() - start_time
+
+    assert not updater._worker_thread.is_alive()
+    # Sentinel None should wake worker immediately (worker queue timeout is 1.0s)
+    assert duration < 0.5
+
+
+def test_high_volume_flush_without_loss():
+    """Verify 500+ items across multiple platforms are completely flushed without loss upon stop()."""
+    storage = MagicMock()
+    updater = GraphMemoryUpdater(graph_id="test_high_volume", storage=storage)
+    updater.BATCH_SIZE = 10
+    updater.SEND_INTERVAL = 0.001
+
+    flushed_items = []
+    lock = threading.Lock()
+
+    def record_send(batch, platform):
+        with lock:
+            flushed_items.extend(batch)
+
+    updater._send_batch_activities = record_send
+
+    updater.start()
+
+    total_items = 600
+    for i in range(total_items):
+        platform = "twitter" if i % 2 == 0 else "reddit"
+        act = AgentActivity(
+            platform=platform,
+            agent_id=i,
+            agent_name=f"Agent_{i}",
+            action_type="CREATE_POST",
+            action_args={"content": f"msg {i}"},
+            round_num=1,
+            timestamp="2026-01-01T00:00:00",
+        )
+        updater.add_activity(act)
+
+    updater.stop()
+
+    assert not updater._worker_thread.is_alive()
+    assert len(flushed_items) == total_items
+
+    flushed_ids = {item.agent_id for item in flushed_items}
+    assert flushed_ids == set(range(total_items))
