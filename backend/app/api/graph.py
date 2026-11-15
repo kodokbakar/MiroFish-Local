@@ -46,7 +46,13 @@ def get_project(project_id: str):
     """
     Get project details
     """
-    project = ProjectManager.get_project(project_id)
+    try:
+        project = ProjectManager.get_project(project_id)
+    except ValueError as e:
+        return jsonify({
+            "success": False,
+            "error": f"Invalid project ID: {str(e)}"
+        }), 400
     
     if not project:
         return jsonify({
@@ -80,7 +86,13 @@ def delete_project(project_id: str):
     """
     Delete project
     """
-    success = ProjectManager.delete_project(project_id)
+    try:
+        success = ProjectManager.delete_project(project_id)
+    except ValueError as e:
+        return jsonify({
+            "success": False,
+            "error": f"Invalid project ID: {str(e)}"
+        }), 400
 
     if not success:
         return jsonify({
@@ -99,7 +111,13 @@ def reset_project(project_id: str):
     """
     Reset project status (for rebuilding graph)
     """
-    project = ProjectManager.get_project(project_id)
+    try:
+        project = ProjectManager.get_project(project_id)
+    except ValueError as e:
+        return jsonify({
+            "success": False,
+            "error": f"Invalid project ID: {str(e)}"
+        }), 400
 
     if not project:
         return jsonify({
@@ -359,7 +377,13 @@ def build_graph():
             }), 400
 
         # Get project
-        project = ProjectManager.get_project(project_id)
+        try:
+            project = ProjectManager.get_project(project_id)
+        except ValueError as e:
+            return jsonify({
+                "success": False,
+                "error": f"Invalid project_id: {str(e)}"
+            }), 400
         if not project:
             return jsonify({
                 "success": False,

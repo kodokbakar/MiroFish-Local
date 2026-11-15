@@ -22,6 +22,7 @@ from enum import Enum
 from ..config import Config
 from ..utils.llm_client import LLMClient
 from ..utils.logger import get_logger
+from ..utils.path_security import get_safe_path
 from .graph_tools import (
     GraphToolsService,
     SearchResult,
@@ -2112,7 +2113,7 @@ class ReportManager:
     @classmethod
     def _get_report_folder(cls, report_id: str) -> str:
         """getreportfolderpath"""
-        return os.path.join(cls.REPORTS_DIR, report_id)
+        return get_safe_path(cls.REPORTS_DIR, report_id)
     
     @classmethod
     def _ensure_report_folder(cls, report_id: str) -> str:
@@ -2740,7 +2741,10 @@ class ReportManager:
             item_path = os.path.join(cls.REPORTS_DIR, item)
             # newformat：filefolder
             if os.path.isdir(item_path):
-                report = cls.get_report(item)
+                try:
+                    report = cls.get_report(item)
+                except ValueError:
+                    continue
                 if report and report.simulation_id == simulation_id:
                     with cls._cache_lock:
                         cls._simulation_report_cache[simulation_id] = getattr(report, "id", report.report_id)
@@ -2748,7 +2752,10 @@ class ReportManager:
             # backward compatibleformat：JSONfile
             elif item.endswith('.json'):
                 report_id = item[:-5]
-                report = cls.get_report(report_id)
+                try:
+                    report = cls.get_report(report_id)
+                except ValueError:
+                    continue
                 if report and report.simulation_id == simulation_id:
                     with cls._cache_lock:
                         cls._simulation_report_cache[simulation_id] = getattr(report, "id", report.report_id)
@@ -2766,14 +2773,20 @@ class ReportManager:
             item_path = os.path.join(cls.REPORTS_DIR, item)
             # newformat：filefolder
             if os.path.isdir(item_path):
-                report = cls.get_report(item)
+                try:
+                    report = cls.get_report(item)
+                except ValueError:
+                    continue
                 if report:
                     if simulation_id is None or report.simulation_id == simulation_id:
                         reports.append(report)
             # backward compatibleformat：JSONfile
             elif item.endswith('.json'):
                 report_id = item[:-5]
-                report = cls.get_report(report_id)
+                try:
+                    report = cls.get_report(report_id)
+                except ValueError:
+                    continue
                 if report:
                     if simulation_id is None or report.simulation_id == simulation_id:
                         reports.append(report)
@@ -2788,6 +2801,8 @@ class ReportManager:
         """Deletereport（entirefolder）"""
         import shutil
 
+        folder_path = cls._get_report_folder(report_id)
+
         # Invalidate in-memory simulation report cache
         with cls._cache_lock:
             keys_to_delete = [
@@ -2796,8 +2811,6 @@ class ReportManager:
             ]
             for sim_id in keys_to_delete:
                 cls._simulation_report_cache.pop(sim_id, None)
-
-        folder_path = cls._get_report_folder(report_id)
         
         # newformat：Deleteentirefilefolder
         if os.path.exists(folder_path) and os.path.isdir(folder_path):
