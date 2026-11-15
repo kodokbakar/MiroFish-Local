@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { JSDOM } from 'jsdom'
@@ -67,4 +68,31 @@ test('keeps HTML-looking code block content as text', () => {
   assert.ok(code)
   assert.equal(code.querySelector('img'), null)
   assert.ok(code.textContent.includes(payload))
+})
+
+test('ordered list parser eliminates exponential ReDoS catastrophic backtracking', () => {
+  const markdownSource = readFileSync(new URL('../src/utils/markdown.js', import.meta.url), 'utf-8')
+
+  const regexMatch = markdownSource.match(/html\.split\((\/(?:\\\/|[^\/])+\/[a-z]*)\)/)
+  assert.ok(regexMatch, 'Should find list tokenizing regex in markdown.js')
+  const [, pattern, flags] = regexMatch[1].match(/^\/(.*)\/([a-z]*)$/)
+  const listRegex = new RegExp(pattern, flags)
+
+  // Unclosed/truncated string with 25 repeated list items triggers exponential backtracking on nested quantifiers
+  const unclosedPayload = "<ol class=\"md-ol\">" + "<li class=\"md-oli\" data-level=\"0\">item</li>".repeat(25)
+  const start = performance.now()
+  unclosedPayload.split(listRegex)
+  const duration = performance.now() - start
+
+  assert.ok(
+    duration < 50,
+    `Catastrophic backtracking: parsing 25 unclosed list items took ${duration.toFixed(2)}ms (must be < 50ms)`
+  )
+
+  // Must not use nested quantifiers /(<ol class=\"md-ol\">(?:<li class=\"md-oli\"[^>]*>[\\s\\S]*?<\/li>)+<\/ol>)/
+  assert.doesNotMatch(
+    markdownSource,
+    /\(\?:<li class="md-oli"\[\^>\]\*>\[\\s\\S\]\*\?<\/li>\)\+/,
+    'markdown list parser must not use nested quantifier (?:<li...>.*?</li>)+ which causes exponential backtracking'
+  )
 })
