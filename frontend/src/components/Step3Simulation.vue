@@ -551,16 +551,18 @@ const handleSimulationStateUpdate = (data) => {
 
   // Update actions if recent_actions present in stream
   if (Array.isArray(data.recent_actions) && data.recent_actions.length > 0) {
-    data.recent_actions.forEach(action => {
-      const uniqueId = `${action.round_num}_${action.timestamp}_${action.agent_id}_${action.action_type}`
-      if (!actionIds.has(uniqueId)) {
-        actionIds.add(uniqueId)
-        actions.value.unshift(action)
-        if (actions.value.length > 200) {
-          actions.value.pop()
-        }
-      }
-    })
+    try {
+      data.recent_actions.forEach(action => {
+        const uniqueId = `${action.round_num}_${action.timestamp}_${action.agent_id}_${action.action_type}`
+        if (!actionIds.value.has(uniqueId)) {
+          actionIds.value.add(uniqueId)
+          allActions.value.unshift(action)
+          if (allActions.value.length > 200) allActions.value.pop()
+        /* close */}
+      /* close */})
+    /* close */} catch (err) {
+      console.warn('Failed to process recent actions:', err)
+    }
   }
 
   // Check completion
