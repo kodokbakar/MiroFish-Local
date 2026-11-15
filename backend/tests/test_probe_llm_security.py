@@ -108,3 +108,99 @@ def test_probe_llm_endpoint_redacts_api_key_in_error():
         assert res.get("status") == "unavailable"
         assert secret not in res.get("error", "")
         assert "[REDACTED]" in res.get("error", "")
+
+
+def test_probe_llm_endpoint_blocks_alternative_ip_representations():
+    """probe_llm_endpoint must reject dword, hex, and octal encodings of metadata addresses."""
+    representations = [
+        "http://2852039166",
+        "http://2852039166/latest/meta-data",
+        "http://0xa9fea9fe",
+        "http://0xa9.0xfe.0xa9.0xfe",
+        "http://0251.0376.0251.0376",
+        "http://0251.0376.0251.0376:80",
+    ]
+    for url in representations:
+        with patch("app.config.Config.get_llm_base_url", return_value=url),              patch("httpx.Client") as mock_client_cls:
+            res = probe_llm_endpoint()
+            assert not mock_client_cls.called, f"Outbound call made for alternative IP representation: {url}"
+            assert res.get("status") == "unavailable"
+            assert "blocked" in res.get("error", "").lower() or "ssrf" in res.get("error", "").lower()
+
+
+def test_probe_llm_endpoint_blocks_ipv6_link_local_and_mapped_metadata():
+    """probe_llm_endpoint must reject IPv6 link-local and IPv6-mapped IPv4 metadata addresses."""
+    ipv6_cases = [
+        "http://[fe80::1]:80",
+        "http://[fe80::1]/v1",
+        "http://[::ffff:169.254.169.254]",
+        "http://[::ffff:169.254.169.254]:8080/latest/meta-data",
+        "http://[::ffff:a9fe:a9fe]",
+    ]
+    for url in ipv6_cases:
+        with patch("app.config.Config.get_llm_base_url", return_value=url),              patch("httpx.Client") as mock_client_cls:
+            res = probe_llm_endpoint()
+            assert not mock_client_cls.called, f"Outbound call made for IPv6 link-local / mapped IP: {url}"
+            assert res.get("status") == "unavailable"
+            assert "blocked" in res.get("error", "").lower() or "ssrf" in res.get("error", "").lower()
+
+
+def test_probe_llm_endpoint_blocks_metadata_with_ports_and_paths():
+    """probe_llm_endpoint must reject metadata IP addresses with custom ports and paths."""
+    metadata_ports = [
+        "http://169.254.169.254:8080",
+        "http://169.254.169.254:1337/api",
+        "http://169.254.169.254:80/latest/meta-data/iam/security-credentials/",
+        "http://169.254.169.254:443",
+    ]
+    for url in metadata_ports:
+        with patch("app.config.Config.get_llm_base_url", return_value=url),              patch("httpx.Client") as mock_client_cls:
+            res = probe_llm_endpoint()
+            assert not mock_client_cls.called, f"Outbound call made for metadata with port: {url}"
+            assert res.get("status") == "unavailable"
+            assert "blocked" in res.get("error", "").lower() or "ssrf" in res.get("error", "").lower()
+
+
+def test_probe_llm_endpoint_legitimate_local_ollama_endpoints():
+    """Legitimate local Ollama endpoints succeed without leaking bearer tokens or keys."""
+    endpoints = [
+        "http://127.0.0.1:11434",
+        "http://localhost:11434",
+        "http://[::1]:11434",
+    ]
+    # Default Ollama without API key
+    for url in endpoints:
+        with patch("app.config.Config.get_llm_base_url", return_value=url),              patch("app.config.Config.get_llm_api_key", return_value=""),              patch("httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client_cls.return_value.__enter__.return_value = mock_client
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_client.get.return_value = mock_resp
+
+            res = probe_llm_endpoint()
+
+            assert res.get("status") == "ok"
+            assert mock_client.get.called
+            _args, kwargs = mock_client.get.call_args
+            headers = kwargs.get("headers", {})
+            assert "Authorization" not in headers or headers["Authorization"] == ""
+
+    # Ollama with key configured still redacts on errors and succeeds on normal response
+    secret_key = "local-ollama-secret-token"
+    for url in endpoints:
+        with patch("app.config.Config.get_llm_base_url", return_value=url),              patch("app.config.Config.get_llm_api_key", return_value=secret_key),              patch("httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client_cls.return_value.__enter__.return_value = mock_client
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_client.get.return_value = mock_resp
+
+            res = probe_llm_endpoint()
+            assert res.get("status") == "ok"
+            assert mock_client.get.called
+
+            mock_client.get.side_effect = Exception(f"Connection error with {secret_key}")
+            err_res = probe_llm_endpoint()
+            assert err_res.get("status") == "unavailable"
+            assert secret_key not in err_res.get("error", "")
+            assert "[REDACTED]" in err_res.get("error", "")
