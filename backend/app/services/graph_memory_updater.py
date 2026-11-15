@@ -4,18 +4,15 @@ Graph memory update service that processes agent activities and updates them to 
 Replaces zep_graph_memory_updater.py — Zep client replaced by GraphStorage.
 """
 
-import os
-import time
 import threading
-import json
-from typing import Dict, Any, List, Optional, Callable
+import time
 from dataclasses import dataclass
 from datetime import datetime
-from queue import Queue, Empty
+from queue import Empty, Queue
+from typing import Any, ClassVar
 
-from ..config import Config
-from ..utils.logger import get_logger
 from ..storage import GraphStorage
+from ..utils.logger import get_logger
 
 logger = get_logger('mirofish.graph_memory_updater')
 
@@ -27,10 +24,10 @@ class AgentActivity:
     agent_id: int
     agent_name: str
     action_type: str        # CREATE_POST, LIKE_POST, etc.
-    action_args: Dict[str, Any]
+    action_args: dict[str, Any]
     round_num: int
     timestamp: str
-    simulation_id: Optional[str] = None
+    simulation_id: str | None = None
 
     def to_episode_text(self) -> str:
         """
@@ -184,7 +181,7 @@ class GraphMemoryUpdater:
 
     BATCH_SIZE = 5
 
-    PLATFORM_DISPLAY_NAMES = {
+    PLATFORM_DISPLAY_NAMES: ClassVar[dict[str, str]] = {
         'twitter': 'worldinterface1',
         'reddit': 'worldinterface2',
     }
@@ -193,7 +190,7 @@ class GraphMemoryUpdater:
     MAX_RETRIES = 3
     RETRY_DELAY = 2
 
-    def __init__(self, graph_id: str, storage: GraphStorage, simulation_id: Optional[str] = None):
+    def __init__(self, graph_id: str, storage: GraphStorage, simulation_id: str | None = None):
         """
         InitializeUpdatedevice
 
@@ -208,14 +205,14 @@ class GraphMemoryUpdater:
 
         self._activity_queue: Queue = Queue()
 
-        self._platform_buffers: Dict[str, List[AgentActivity]] = {
+        self._platform_buffers: dict[str, list[AgentActivity]] = {
             'twitter': [],
             'reddit': [],
         }
         self._buffer_lock = threading.Lock()
 
         self._running = False
-        self._worker_thread: Optional[threading.Thread] = None
+        self._worker_thread: threading.Thread | None = None
 
         self._total_activities = 0
         self._total_sent = 0
@@ -246,10 +243,15 @@ class GraphMemoryUpdater:
         """Stop background worker thread"""
         self._running = False
 
-        self._flush_remaining()
-
         if self._worker_thread and self._worker_thread.is_alive():
+            self._activity_queue.put(None)
             self._worker_thread.join(timeout=10)
+            if self._worker_thread.is_alive():
+                logger.warning(
+                    f"GraphMemoryUpdater worker thread did not terminate within timeout: graph_id={self.graph_id}"
+                )
+
+        self._flush_remaining()
 
         logger.info(f"GraphMemoryUpdater stopped: graph_id={self.graph_id}, "
                      f"total_activities={self._total_activities}, "
@@ -260,6 +262,8 @@ class GraphMemoryUpdater:
 
     def add_activity(self, activity: AgentActivity):
         """Add an agent activity to queue"""
+        if activity is None:
+            return
         if activity.action_type == "DO_NOTHING":
             self._skipped_count += 1
             return
@@ -268,7 +272,7 @@ class GraphMemoryUpdater:
         self._total_activities += 1
         logger.debug(f"Add activity to queue: {activity.agent_name} - {activity.action_type}")
 
-    def add_activity_from_dict(self, data: Dict[str, Any], platform: str):
+    def add_activity_from_dict(self, data: dict[str, Any], platform: str):
         """Add activity from dict data"""
         if "event_type" in data:
             return
@@ -288,31 +292,36 @@ class GraphMemoryUpdater:
 
     def _worker_loop(self):
         """Background worker loop - batch send activities to graph by platform"""
-        while self._running or not self._activity_queue.empty():
+        while self._running:
             try:
                 try:
                     activity = self._activity_queue.get(timeout=1)
-
-                    platform = activity.platform.lower()
-                    with self._buffer_lock:
-                        if platform not in self._platform_buffers:
-                            self._platform_buffers[platform] = []
-                        self._platform_buffers[platform].append(activity)
-
-                        if len(self._platform_buffers[platform]) >= self.BATCH_SIZE:
-                            batch = self._platform_buffers[platform][:self.BATCH_SIZE]
-                            self._platform_buffers[platform] = self._platform_buffers[platform][self.BATCH_SIZE:]
-                            self._send_batch_activities(batch, platform)
-                            time.sleep(self.SEND_INTERVAL)
-
                 except Empty:
-                    pass
+                    continue
 
-            except Exception as e:
+                if activity is None:
+                    break
+
+                platform = activity.platform.lower()
+                batch = None
+                with self._buffer_lock:
+                    if platform not in self._platform_buffers:
+                        self._platform_buffers[platform] = []
+                    self._platform_buffers[platform].append(activity)
+
+                    if len(self._platform_buffers[platform]) >= self.BATCH_SIZE:
+                        batch = self._platform_buffers[platform][:self.BATCH_SIZE]
+                        self._platform_buffers[platform] = self._platform_buffers[platform][self.BATCH_SIZE:]
+
+                if batch:
+                    self._send_batch_activities(batch, platform)
+                    time.sleep(self.SEND_INTERVAL)
+
+            except Exception as e:  # noqa: BLE001
                 logger.error(f"Worker loop exception: {e}")
                 time.sleep(1)
 
-    def _send_batch_activities(self, activities: List[AgentActivity], platform: str):
+    def _send_batch_activities(self, activities: list[AgentActivity], platform: str):
         """
         Send batched activities to the graph using fast-path structured ingestion,
         falling back to text add_text() if fast-path is unsupported by the storage backend.
@@ -356,7 +365,7 @@ class GraphMemoryUpdater:
                 logger.info(f"Successfully batch sent {len(activities)} {display_name} activities to graph {self.graph_id}")
                 return
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 if attempt < self.MAX_RETRIES - 1:
                     logger.warning(f"Batch send to graph failed (attempt {attempt + 1}/{self.MAX_RETRIES}): {e}")
                     time.sleep(self.RETRY_DELAY * (attempt + 1))
@@ -369,6 +378,8 @@ class GraphMemoryUpdater:
         while not self._activity_queue.empty():
             try:
                 activity = self._activity_queue.get_nowait()
+                if activity is None:
+                    continue
                 platform = activity.platform.lower()
                 with self._buffer_lock:
                     if platform not in self._platform_buffers:
@@ -377,16 +388,20 @@ class GraphMemoryUpdater:
             except Empty:
                 break
 
+        batches_to_send = []
         with self._buffer_lock:
             for platform, buffer in self._platform_buffers.items():
                 if buffer:
-                    display_name = self._get_platform_display_name(platform)
-                    logger.info(f"Send remaining {len(buffer)} {display_name} platform activities")
-                    self._send_batch_activities(buffer, platform)
+                    batches_to_send.append((platform, list(buffer)))
             for platform in self._platform_buffers:
                 self._platform_buffers[platform] = []
 
-    def get_stats(self) -> Dict[str, Any]:
+        for platform, buffer in batches_to_send:
+            display_name = self._get_platform_display_name(platform)
+            logger.info(f"Send remaining {len(buffer)} {display_name} platform activities")
+            self._send_batch_activities(buffer, platform)
+
+    def get_stats(self) -> dict[str, Any]:
         """Get statistics"""
         with self._buffer_lock:
             buffer_sizes = {p: len(b) for p, b in self._platform_buffers.items()}
@@ -413,7 +428,7 @@ class GraphMemoryManager:
     NOTE: create_updater() requires a GraphStorage instance — must be passed in.
     """
 
-    _updaters: Dict[str, GraphMemoryUpdater] = {}
+    _updaters: ClassVar[dict[str, GraphMemoryUpdater]] = {}
     _lock = threading.Lock()
 
     @classmethod
@@ -440,7 +455,7 @@ class GraphMemoryManager:
             return updater
 
     @classmethod
-    def get_updater(cls, simulation_id: str) -> Optional[GraphMemoryUpdater]:
+    def get_updater(cls, simulation_id: str) -> GraphMemoryUpdater | None:
         """Get updater for simulation"""
         return cls._updaters.get(simulation_id)
 
@@ -467,13 +482,13 @@ class GraphMemoryManager:
                 for simulation_id, updater in list(cls._updaters.items()):
                     try:
                         updater.stop()
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001
                         logger.error(f"Failed to stop updater: simulation_id={simulation_id}, error={e}")
                 cls._updaters.clear()
             logger.info("Stopped all graph memory updaters")
 
     @classmethod
-    def get_all_stats(cls) -> Dict[str, Dict[str, Any]]:
+    def get_all_stats(cls) -> dict[str, dict[str, Any]]:
         """Get statistics for all updaters"""
         return {
             sim_id: updater.get_stats()

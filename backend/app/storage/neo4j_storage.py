@@ -237,21 +237,39 @@ class Neo4jStorage(GraphStorage):
         logger.info(f"Created graph '{name}' with id {graph_id}")
         return graph_id
 
-    def delete_graph(self, graph_id: str) -> None:
-        def _delete(tx):
-            # Delete all entities and their relationships
-            tx.run(
-                "MATCH (n {graph_id: $gid}) DETACH DELETE n",
-                gid=graph_id,
-            )
-            # Delete graph node
-            tx.run(
-                "MATCH (g:Graph {graph_id: $gid}) DELETE g",
-                gid=graph_id,
-            )
-
+    def delete_graph(self, graph_id: str, batch_size: int = 1000) -> None:
+        """
+        Delete a graph and all its nodes/edges in batches to prevent
+        Neo4j transaction log blowup and JVM heap exhaustion.
+        Explicitly targets labelled nodes (:Entity, :Episode) using graph_id indexed lookups
+        to prevent expensive AllNodesScan.
+        """
         with self._driver.session() as session:
-            self._call_with_retry(session.execute_write, _delete)
+            for label in ("Entity", "Episode"):
+                query = (
+                    f"MATCH (n:{label} {{graph_id: $gid}}) "
+                    f"WITH n LIMIT $batch_size "
+                    f"DETACH DELETE n "
+                    f"RETURN count(*) AS deleted"
+                )
+                while True:
+                    def _delete_batch(tx, q=query):
+                        res = tx.run(q, gid=graph_id, batch_size=batch_size)
+                        rec = res.single()
+                        return rec.get("deleted", 0) if rec else 0
+
+                    deleted_count = self._call_with_retry(session.execute_write, _delete_batch)
+                    if not deleted_count or deleted_count == 0:
+                        break
+
+            # Delete graph node
+            def _delete_graph_node(tx):
+                tx.run(
+                    "MATCH (g:Graph {graph_id: $gid}) DETACH DELETE g",
+                    gid=graph_id,
+                )
+
+            self._call_with_retry(session.execute_write, _delete_graph_node)
         logger.info(f"Deleted graph {graph_id}")
 
     def set_ontology(self, graph_id: str, ontology: Dict[str, Any]) -> None:
@@ -959,16 +977,20 @@ class Neo4jStorage(GraphStorage):
     # Read edges
     # ----------------------------------------------------------------
 
-    def get_all_edges(self, graph_id: str) -> List[Dict[str, Any]]:
+    def get_all_edges(
+        self, graph_id: str, limit: Optional[int] = 2000
+    ) -> List[Dict[str, Any]]:
         def _read(tx):
-            result = tx.run(
-                """
-                MATCH (src:Entity)-[r:RELATION {graph_id: $gid}]->(tgt:Entity)
-                RETURN r, src.uuid AS src_uuid, tgt.uuid AS tgt_uuid
-                ORDER BY r.created_at DESC
-                """,
-                gid=graph_id,
-            )
+            query = """
+            MATCH (src:Entity)-[r:RELATION {graph_id: $gid}]->(tgt:Entity)
+            RETURN r, src.uuid AS src_uuid, tgt.uuid AS tgt_uuid
+            ORDER BY r.created_at DESC
+            """
+            params: Dict[str, Any] = {"gid": graph_id}
+            if limit is not None:
+                query += " LIMIT $limit\n"
+                params["limit"] = limit
+            result = tx.run(query, **params)
             return [
                 self._edge_to_dict(record["r"], record["src_uuid"], record["tgt_uuid"])
                 for record in result

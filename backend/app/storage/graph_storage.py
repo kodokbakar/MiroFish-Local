@@ -19,7 +19,7 @@ class GraphStorage(ABC):
         """Create a new graph. Returns graph_id."""
 
     @abstractmethod
-    def delete_graph(self, graph_id: str) -> None:
+    def delete_graph(self, graph_id: str, batch_size: int = 1000) -> None:
         """Delete a graph and all its nodes/edges."""
 
     @abstractmethod
@@ -124,7 +124,9 @@ class GraphStorage(ABC):
     # --- Read edges ---
 
     @abstractmethod
-    def get_all_edges(self, graph_id: str) -> List[Dict[str, Any]]:
+    def get_all_edges(
+        self, graph_id: str, limit: Optional[int] = 2000
+    ) -> List[Dict[str, Any]]:
         """Get all edges in a graph."""
 
     # --- Search ---
