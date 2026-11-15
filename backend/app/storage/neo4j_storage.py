@@ -959,16 +959,20 @@ class Neo4jStorage(GraphStorage):
     # Read edges
     # ----------------------------------------------------------------
 
-    def get_all_edges(self, graph_id: str) -> List[Dict[str, Any]]:
+    def get_all_edges(
+        self, graph_id: str, limit: Optional[int] = 2000
+    ) -> List[Dict[str, Any]]:
         def _read(tx):
-            result = tx.run(
-                """
-                MATCH (src:Entity)-[r:RELATION {graph_id: $gid}]->(tgt:Entity)
-                RETURN r, src.uuid AS src_uuid, tgt.uuid AS tgt_uuid
-                ORDER BY r.created_at DESC
-                """,
-                gid=graph_id,
-            )
+            query = """
+            MATCH (src:Entity)-[r:RELATION {graph_id: $gid}]->(tgt:Entity)
+            RETURN r, src.uuid AS src_uuid, tgt.uuid AS tgt_uuid
+            ORDER BY r.created_at DESC
+            """
+            params: Dict[str, Any] = {"gid": graph_id}
+            if limit is not None:
+                query += " LIMIT $limit\n"
+                params["limit"] = limit
+            result = tx.run(query, **params)
             return [
                 self._edge_to_dict(record["r"], record["src_uuid"], record["tgt_uuid"])
                 for record in result
