@@ -88,6 +88,9 @@ Only the orchestrator edits this file.
 | 069 | - | Issue #92: synchronize simulation start with mutex lock to eliminate TOCTOU zombie subprocesses | bugfix | direct | low | ported | PR #110 (`ac9c3c6`) | Mutex lock and atomic state transition for simulation start to eliminate TOCTOU subprocess duplicates; reviewer APPROVE, tester PASS, 6 backend tests pass. |
 | 070 | - | Issue #93: resolve Neo4j connection pool starvation caused by blocking embedding calls inside active sessions | bugfix | adapt | low | ported | PR #112 (`ab07038`) | Compute embeddings prior to acquiring Neo4j session and reuse vector for scope=both; reviewer APPROVE, tester PASS, 13 backend tests pass. |
 | 071 | - | Issue #94: resolve SSE parser crash on unhandled Ref methods and undefined actions identifier | bugfix | direct | low | ported | PR #113 (`c2f5743`) | Fix actionIds.value ref unwrapping and actions -> allActions identifier in Step3Simulation; reviewer APPROVE, tester PASS, 29 frontend tests pass. |
+| 072 | - | Issue #95: eliminate exponential ReDoS catastrophic backtracking in markdown list parser | bugfix | direct | low | pending | `port/072` | Replace nested quantifier in ordered list regex with linear non-backtracking pattern. |
+| 073 | - | Issue #96: optimize entity reader and bound graph edge queries to eliminate O(|V|*|E|) CPU starvation | bugfix | adapt | medium | pending | `port/073` | Add safe query limits on get_all_edges and index edges in memory for O(|V|+|E|) filtering. |
+| 074 | - | Issue #97: batch graph deletion to prevent JVM heap exhaustion and add labels to delete queries | bugfix | adapt | medium | pending | `port/074` | Add explicit node labels and batched transactions to graph deletion queries. |
 
 ## Skipped (with reason)
 | Upstream commit | Reason |
