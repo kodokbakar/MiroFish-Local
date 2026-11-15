@@ -179,3 +179,141 @@ def test_execute_write_recovers_with_new_session_on_transient_failure(_mock_slee
         "Expected retry to acquire a new session from driver.session(), "
         f"but only {len(sessions_created) - init_session_count} session(s) were created"
     )
+
+
+@patch("time.sleep", return_value=None)
+def test_retry_exhaustion_raises_final_error_and_cleans_sessions(_mock_sleep):
+    """When transient errors persist beyond MAX_RETRIES, the final error is raised
+
+    and all sessions are cleanly closed without leaks.
+    """
+    sessions_created = []
+
+    def session_factory():
+        s = MockSessionWithLifecycle(session_id=len(sessions_created) + 1)
+        sessions_created.append(s)
+        return s
+
+    storage, _mock_driver = _make_storage_with_driver_factory(session_factory)
+    init_session_count = len(sessions_created)
+
+    persistent_error = TransientError("Database persistently busy")
+
+    def failing_work(tx):
+        raise persistent_error
+
+    with pytest.raises(TransientError) as exc_info:
+        storage._execute_read(failing_work)
+
+    assert exc_info.value is persistent_error
+
+    # Should have attempted MAX_RETRIES times
+    op_sessions = sessions_created[init_session_count:]
+    assert len(op_sessions) == storage.MAX_RETRIES
+
+    # Verify every session used during the retry loop was cleanly closed
+    for s in op_sessions:
+        assert s.closed is True
+
+
+def test_non_transient_error_fails_immediately_without_retry():
+    """Non-transient ClientError (e.g. Cypher syntax error or constraint violation)
+
+    fails immediately on attempt 1 without retrying.
+    """
+    sessions_created = []
+
+    def session_factory():
+        s = MockSessionWithLifecycle(session_id=len(sessions_created) + 1)
+        sessions_created.append(s)
+        return s
+
+    storage, _mock_driver = _make_storage_with_driver_factory(session_factory)
+    init_session_count = len(sessions_created)
+
+    client_error = ClientError("Invalid Cypher syntax")
+
+    def failing_work(tx):
+        raise client_error
+
+    with pytest.raises(ClientError) as exc_info:
+        storage._execute_write(failing_work)
+
+    assert exc_info.value is client_error
+
+    op_sessions = sessions_created[init_session_count:]
+    assert len(op_sessions) == 1
+    assert op_sessions[0].closed is True
+
+
+@patch("time.sleep", return_value=None)
+def test_mixed_transient_failures_followed_by_success(_mock_sleep):
+    """Verify a session that fails with SessionExpired on attempt 1 and
+
+    ServiceUnavailable on attempt 2 successfully returns on attempt 3 with fresh sessions.
+    """
+    sessions_created = []
+
+    def session_factory():
+        s = MockSessionWithLifecycle(session_id=len(sessions_created) + 1)
+        sessions_created.append(s)
+        return s
+
+    storage, _mock_driver = _make_storage_with_driver_factory(session_factory)
+    init_session_count = len(sessions_created)
+
+    attempt_count = 0
+
+    def work(tx):
+        nonlocal attempt_count
+        attempt_count += 1
+        if attempt_count == 1:
+            raise SessionExpired("Session expired on attempt 1")
+        if attempt_count == 2:
+            raise ServiceUnavailable("Service unavailable on attempt 2")
+        return "success"
+
+    result = storage._execute_read(work)
+
+    assert result == "success"
+    assert attempt_count == 3
+
+    op_sessions = sessions_created[init_session_count:]
+    assert len(op_sessions) == 3
+    for s in op_sessions:
+        assert s.closed is True
+
+
+@patch("time.sleep")
+@patch("random.uniform", side_effect=[0.1, 0.25])
+def test_custom_backoff_delay_verification(mock_random, mock_sleep):
+    """Verify exponential backoff is called with jitter between retry attempts."""
+    sessions_created = []
+
+    def session_factory():
+        s = MockSessionWithLifecycle(session_id=len(sessions_created) + 1)
+        sessions_created.append(s)
+        return s
+
+    storage, _mock_driver = _make_storage_with_driver_factory(session_factory)
+    storage.RETRY_DELAY_BASE = 2.0
+
+    attempt_count = 0
+
+    def work(tx):
+        nonlocal attempt_count
+        attempt_count += 1
+        if attempt_count < 3:
+            raise TransientError(f"Transient error on attempt {attempt_count}")
+        return "ok"
+
+    result = storage._execute_write(work)
+
+    assert result == "ok"
+    assert attempt_count == 3
+
+    # Attempt 0: wait = 2.0 * (2 ** 0) + 0.1 = 2.1
+    # Attempt 1: wait = 2.0 * (2 ** 1) + 0.25 = 4.25
+    assert mock_sleep.call_count == 2
+    mock_sleep.assert_any_call(2.1)
+    mock_sleep.assert_any_call(4.25)
