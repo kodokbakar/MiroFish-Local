@@ -124,7 +124,9 @@ class GraphStorage(ABC):
     # --- Read edges ---
 
     @abstractmethod
-    def get_all_edges(self, graph_id: str) -> List[Dict[str, Any]]:
+    def get_all_edges(
+        self, graph_id: str, limit: Optional[int] = 2000
+    ) -> List[Dict[str, Any]]:
         """Get all edges in a graph."""
 
     # --- Search ---
