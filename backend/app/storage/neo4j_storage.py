@@ -995,16 +995,18 @@ class Neo4jStorage(GraphStorage):
         (callers like zep_tools will wrap into SearchResult).
         """
         result = {"edges": [], "nodes": [], "query": query}
+        query_text = (query or "").strip()
+        query_vector = self._search.embedding.embed(query) if query_text else None
 
         with self._driver.session() as session:
             if scope in ("edges", "both"):
                 result["edges"] = self._search.search_edges(
-                    session, graph_id, query, limit
+                    session, graph_id, query, limit, query_vector=query_vector
                 )
 
             if scope in ("nodes", "both"):
                 result["nodes"] = self._search.search_nodes(
-                    session, graph_id, query, limit
+                    session, graph_id, query, limit, query_vector=query_vector
                 )
 
         return result
