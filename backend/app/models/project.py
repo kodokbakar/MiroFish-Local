@@ -12,6 +12,7 @@ from typing import Dict, Any, List, Optional
 from enum import Enum
 from dataclasses import dataclass, field, asdict
 from ..config import Config
+from ..utils.path_security import get_safe_path
 
 
 class ProjectStatus(str, Enum):
@@ -112,7 +113,7 @@ class ProjectManager:
     @classmethod
     def _get_project_dir(cls, project_id: str) -> str:
         """Get project directory path"""
-        return os.path.join(cls.PROJECTS_DIR, project_id)
+        return get_safe_path(cls.PROJECTS_DIR, project_id)
 
     @classmethod
     def _get_project_meta_path(cls, project_id: str) -> str:
@@ -209,9 +210,15 @@ class ProjectManager:
 
         projects = []
         for project_id in os.listdir(cls.PROJECTS_DIR):
-            project = cls.get_project(project_id)
-            if project:
-                projects.append(project)
+            project_dir = os.path.join(cls.PROJECTS_DIR, project_id)
+            if not os.path.isdir(project_dir):
+                continue
+            try:
+                project = cls.get_project(project_id)
+                if project:
+                    projects.append(project)
+            except ValueError:
+                continue
 
         # Sort by creation time (descending)
         projects.sort(key=lambda p: p.created_at, reverse=True)
