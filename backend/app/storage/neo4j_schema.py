@@ -5,7 +5,6 @@ Called by Neo4jStorage.create_graph() to set up vector + fulltext indexes.
 """
 from ..config import Config
 
-
 # Constraints
 CREATE_GRAPH_UUID_CONSTRAINT = """
 CREATE CONSTRAINT graph_uuid IF NOT EXISTS
@@ -22,12 +21,20 @@ CREATE CONSTRAINT episode_uuid IF NOT EXISTS
 FOR (ep:Episode) REQUIRE ep.uuid IS UNIQUE
 """
 
-# Property indexes (for fast MERGE lookups and edge filtering)
-CREATE_ENTITY_GRAPH_NAME_INDEX = """
-CREATE INDEX entity_graph_name IF NOT EXISTS
-FOR (n:Entity) ON (n.graph_id, n.name_lower)
+# Drop legacy plain index if it exists before creating composite uniqueness constraint
+DROP_LEGACY_ENTITY_GRAPH_NAME_INDEX = """
+DROP INDEX entity_graph_name IF EXISTS
 """
 
+CREATE_ENTITY_GRAPH_NAME_CONSTRAINT = """
+CREATE CONSTRAINT entity_graph_name_unique IF NOT EXISTS
+FOR (n:Entity) REQUIRE (n.graph_id, n.name_lower) IS UNIQUE
+"""
+
+# Backward compatibility alias
+CREATE_ENTITY_GRAPH_NAME_INDEX = CREATE_ENTITY_GRAPH_NAME_CONSTRAINT
+
+# Property indexes (for fast MERGE lookups and edge filtering)
 CREATE_RELATION_GRAPH_ID_INDEX = """
 CREATE INDEX relation_graph_id IF NOT EXISTS
 FOR ()-[r:RELATION]-() ON (r.graph_id)
@@ -70,10 +77,11 @@ SHOW INDEXES YIELD name, state, populationPercent, type
 
 # All schema queries to run on startup
 ALL_SCHEMA_QUERIES = [
+    DROP_LEGACY_ENTITY_GRAPH_NAME_INDEX,
     CREATE_GRAPH_UUID_CONSTRAINT,
     CREATE_ENTITY_UUID_CONSTRAINT,
     CREATE_EPISODE_UUID_CONSTRAINT,
-    CREATE_ENTITY_GRAPH_NAME_INDEX,
+    CREATE_ENTITY_GRAPH_NAME_CONSTRAINT,
     CREATE_RELATION_GRAPH_ID_INDEX,
     CREATE_ENTITY_VECTOR_INDEX,
     CREATE_RELATION_VECTOR_INDEX,
