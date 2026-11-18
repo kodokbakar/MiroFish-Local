@@ -12,7 +12,7 @@ import threading
 import subprocess
 import signal
 import atexit
-from typing import Dict, Any, List, Optional, Union, TYPE_CHECKING
+from typing import Dict, Any, List, Optional, Union, Set, TYPE_CHECKING
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -59,9 +59,10 @@ class AgentAction:
     action_args: Dict[str, Any] = field(default_factory=dict)
     result: Optional[str] = None
     success: bool = True
+    action_id: Optional[str] = None
     
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d = {
             "round_num": self.round_num,
             "timestamp": self.timestamp,
             "platform": self.platform,
@@ -72,6 +73,9 @@ class AgentAction:
             "result": self.result,
             "success": self.success,
         }
+        if self.action_id is not None:
+            d["action_id"] = self.action_id
+        return d
 
 
 @dataclass
@@ -138,6 +142,10 @@ class SimulationRunState:
     recent_actions: List[AgentAction] = field(default_factory=list)
     max_recent_actions: int = 50
 
+    # Synchronization and deduplication
+    _lock: threading.RLock = field(default_factory=threading.RLock, repr=False, compare=False)
+    seen_action_ids: Set[Any] = field(default_factory=set, repr=False, compare=False)
+
     # Timestamps
     started_at: Optional[str] = None
     updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
@@ -149,55 +157,116 @@ class SimulationRunState:
     # Process ID (for stopping)
     process_pid: Optional[int] = None
 
-    def add_action(self, action: AgentAction):
-        """Add action to recent actions list"""
-        self.recent_actions.insert(0, action)
-        if len(self.recent_actions) > self.max_recent_actions:
-            self.recent_actions = self.recent_actions[:self.max_recent_actions]
-        if hasattr(self, "actions") and isinstance(self.actions, list):
-            self.actions.append(action)
+    @property
+    def lock(self) -> threading.RLock:
+        return self._lock
 
-        if action.platform == "twitter":
-            self.twitter_actions_count += 1
-        else:
-            self.reddit_actions_count += 1
-        
-        self.updated_at = datetime.now().isoformat()
-    
+    @property
+    def action_ids(self) -> Set[Any]:
+        return self.seen_action_ids
+
+    @property
+    def _action_ids(self) -> Set[Any]:
+        return self.seen_action_ids
+
+    @property
+    def _seen_action_ids(self) -> Set[Any]:
+        return self.seen_action_ids
+
+    def __post_init__(self):
+        with self._lock:
+            if self.actions:
+                for a in self.actions:
+                    self.seen_action_ids.add(self._get_action_key(a))
+            if self.recent_actions:
+                for a in self.recent_actions:
+                    self.seen_action_ids.add(self._get_action_key(a))
+
+    def _get_action_key(self, action: AgentAction) -> Any:
+        if getattr(action, "action_id", None):
+            return str(action.action_id)
+        if getattr(action, "id", None):
+            return str(action.id)
+        action_args = getattr(action, "action_args", None)
+        args_repr = ""
+        if action_args:
+            if isinstance(action_args, dict):
+                arg_id = action_args.get("action_id") or action_args.get("id")
+                if arg_id:
+                    return str(arg_id)
+                try:
+                    args_repr = json.dumps(action_args, sort_keys=True, default=str)
+                except Exception:
+                    args_repr = str(action_args)
+            else:
+                args_repr = str(action_args)
+        return (
+            getattr(action, "platform", ""),
+            getattr(action, "round_num", 0),
+            getattr(action, "agent_id", 0),
+            getattr(action, "action_type", ""),
+            getattr(action, "timestamp", ""),
+            args_repr,
+        )
+
+    def add_action(self, action: AgentAction) -> bool:
+        """Add action to recent actions list if not duplicate. Returns True if added, False if duplicate."""
+        with self._lock:
+            key = self._get_action_key(action)
+            if key in self.seen_action_ids:
+                return False
+            self.seen_action_ids.add(key)
+
+            self.recent_actions.insert(0, action)
+            if len(self.recent_actions) > self.max_recent_actions:
+                self.recent_actions = self.recent_actions[:self.max_recent_actions]
+            if hasattr(self, "actions") and isinstance(self.actions, list):
+                self.actions.append(action)
+
+            if action.platform == "twitter":
+                self.twitter_actions_count += 1
+            else:
+                self.reddit_actions_count += 1
+
+            self.updated_at = datetime.now().isoformat()
+            return True
+
     def to_dict(self) -> Dict[str, Any]:
-        return {
-            "simulation_id": self.simulation_id,
-            "runner_status": self.runner_status.value,
-            "current_round": self.current_round,
-            "total_rounds": self.total_rounds,
-            "simulated_hours": self.simulated_hours,
-            "total_simulation_hours": self.total_simulation_hours,
-            "progress_percent": round(self.current_round / max(self.total_rounds, 1) * 100, 1),
-            # Per-platform independent rounds and time
-            "twitter_current_round": self.twitter_current_round,
-            "reddit_current_round": self.reddit_current_round,
-            "twitter_simulated_hours": self.twitter_simulated_hours,
-            "reddit_simulated_hours": self.reddit_simulated_hours,
-            "twitter_running": self.twitter_running,
-            "reddit_running": self.reddit_running,
-            "twitter_completed": self.twitter_completed,
-            "reddit_completed": self.reddit_completed,
-            "twitter_actions_count": self.twitter_actions_count,
-            "reddit_actions_count": self.reddit_actions_count,
-            "total_actions_count": self.twitter_actions_count + self.reddit_actions_count,
-            "started_at": self.started_at,
-            "updated_at": self.updated_at,
-            "completed_at": self.completed_at,
-            "error": self.error,
-            "process_pid": self.process_pid,
-        }
+        with self._lock:
+            return {
+                "simulation_id": self.simulation_id,
+                "runner_status": self.runner_status.value,
+                "current_round": self.current_round,
+                "total_rounds": self.total_rounds,
+                "simulated_hours": self.simulated_hours,
+                "total_simulation_hours": self.total_simulation_hours,
+                "progress_percent": round(self.current_round / max(self.total_rounds, 1) * 100, 1),
+                # Per-platform independent rounds and time
+                "twitter_current_round": self.twitter_current_round,
+                "reddit_current_round": self.reddit_current_round,
+                "twitter_simulated_hours": self.twitter_simulated_hours,
+                "reddit_simulated_hours": self.reddit_simulated_hours,
+                "twitter_running": self.twitter_running,
+                "reddit_running": self.reddit_running,
+                "twitter_completed": self.twitter_completed,
+                "reddit_completed": self.reddit_completed,
+                "twitter_actions_count": self.twitter_actions_count,
+                "reddit_actions_count": self.reddit_actions_count,
+                "total_actions_count": self.twitter_actions_count + self.reddit_actions_count,
+                "started_at": self.started_at,
+                "updated_at": self.updated_at,
+                "completed_at": self.completed_at,
+                "error": self.error,
+                "process_pid": self.process_pid,
+            }
 
     def to_detail_dict(self) -> Dict[str, Any]:
         """Details with recent actions"""
-        result = self.to_dict()
-        result["recent_actions"] = [a.to_dict() for a in self.recent_actions]
-        result["rounds_count"] = len(self.rounds)
-        return result
+        with self._lock:
+            result = self.to_dict()
+            result["recent_actions"] = [a.to_dict() for a in list(self.recent_actions)]
+            result["rounds_count"] = len(self.rounds)
+            return result
 
 
 class SimulationRunner:
@@ -310,7 +379,7 @@ class SimulationRunner:
             # Load recent actions
             actions_data = data.get("recent_actions", [])
             for a in actions_data:
-                state.recent_actions.append(AgentAction(
+                act = AgentAction(
                     round_num=a.get("round_num", 0),
                     timestamp=a.get("timestamp", ""),
                     platform=a.get("platform", ""),
@@ -320,7 +389,10 @@ class SimulationRunner:
                     action_args=a.get("action_args", {}),
                     result=a.get("result"),
                     success=a.get("success", True),
-                ))
+                    action_id=a.get("action_id"),
+                )
+                state.recent_actions.append(act)
+                state.seen_action_ids.add(state._get_action_key(act))
             
             return state
         except Exception as e:
@@ -831,6 +903,7 @@ class SimulationRunner:
 
                                 continue
 
+                            raw_action_id = action_data.get("action_id") or action_data.get("id")
                             action = AgentAction(
                                 round_num=action_data.get("round", 0),
                                 timestamp=action_data.get("timestamp", datetime.now().isoformat()),
@@ -841,14 +914,18 @@ class SimulationRunner:
                                 action_args=action_data.get("action_args", {}),
                                 result=action_data.get("result"),
                                 success=action_data.get("success", True),
+                                action_id=str(raw_action_id) if raw_action_id is not None else None,
                             )
+                            added = True
                             if hasattr(state, "add_action") and callable(state.add_action):
-                                state.add_action(action)
+                                res = state.add_action(action)
+                                if res is False:
+                                    added = False
                             elif hasattr(state, "actions") and isinstance(state.actions, list):
                                 state.actions.append(action)
 
-                            if hasattr(state, "actions") and isinstance(state.actions, list) and action not in state.actions:
-                                state.actions.append(action)
+                            if not added:
+                                continue
 
                             # Incrementally cache parsed action
                             cache_sim_id = getattr(state, "simulation_id", str(state))
