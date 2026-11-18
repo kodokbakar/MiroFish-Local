@@ -476,6 +476,20 @@ class SimulationRunner:
             if not os.path.exists(script_path):
                 raise ValueError(f"Script does not exist: {script_path}")
             
+            # If starting from round 0 (fresh or restarted run), isolate residual action logs
+            if state.current_round == 0:
+                for platform_dir in ["twitter", "reddit", ""]:
+                    dir_path = os.path.join(sim_dir, platform_dir) if platform_dir else sim_dir
+                    action_log = os.path.join(dir_path, "actions.jsonl")
+                    if os.path.exists(action_log) and os.path.getsize(action_log) > 0:
+                        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                        archived_path = os.path.join(dir_path, f"actions_{ts}.jsonl")
+                        try:
+                            os.rename(action_log, archived_path)
+                            logger.info(f"Rotated stale action log: {action_log} -> {archived_path}")
+                        except OSError as e:
+                            logger.warning(f"Failed to rotate action log {action_log}: {e}")
+
             # Create action queue
             action_queue = Queue()
             cls._action_queues[simulation_id] = action_queue
@@ -1171,7 +1185,7 @@ class SimulationRunner:
             cls._graph_memory_enabled.pop(simulation_id, None)
 
         logger.info(f"Simulation stopped: {simulation_id}")
-        return state
+        return latest_state
     
     @classmethod
     def _read_actions_from_file(

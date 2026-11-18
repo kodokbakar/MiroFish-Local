@@ -35,10 +35,22 @@ class PlatformActionLogger:
         self.log_dir = os.path.join(base_dir, platform)
         self.log_path = os.path.join(self.log_dir, "actions.jsonl")
         self._ensure_dir()
+        self._rotated = False
     
     def _ensure_dir(self):
         """Ensure directory exists"""
         os.makedirs(self.log_dir, exist_ok=True)
+
+    def _rotate_stale_log(self):
+        """Rotate existing action log to isolate prior run events"""
+        if os.path.exists(self.log_path) and os.path.getsize(self.log_path) > 0:
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            archived_path = os.path.join(self.log_dir, f"actions_{ts}.jsonl")
+            try:
+                os.rename(self.log_path, archived_path)
+            except OSError:
+                pass
+        self._rotated = True
     
     def log_action(
         self,
@@ -51,6 +63,8 @@ class PlatformActionLogger:
         success: bool = True
     ):
         """Log an action"""
+        if round_num == 0 and not self._rotated:
+            self._rotate_stale_log()
         entry = {
             "round": round_num,
             "timestamp": datetime.now().isoformat(),
@@ -67,6 +81,8 @@ class PlatformActionLogger:
     
     def log_round_start(self, round_num: int, simulated_hour: int):
         """Log round start"""
+        if round_num == 0 and not self._rotated:
+            self._rotate_stale_log()
         entry = {
             "round": round_num,
             "timestamp": datetime.now().isoformat(),
@@ -91,6 +107,8 @@ class PlatformActionLogger:
     
     def log_simulation_start(self, config: Dict[str, Any]):
         """Log simulation start"""
+        if not self._rotated:
+            self._rotate_stale_log()
         entry = {
             "timestamp": datetime.now().isoformat(),
             "event_type": "simulation_start",
@@ -207,6 +225,19 @@ class ActionLogger:
     def __init__(self, log_path: str):
         self.log_path = log_path
         self._ensure_dir()
+        self._rotated = False
+
+    def _rotate_stale_log(self):
+        """Rotate existing action log to isolate prior run events"""
+        if os.path.exists(self.log_path) and os.path.getsize(self.log_path) > 0:
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            log_dir = os.path.dirname(self.log_path) or "."
+            archived_path = os.path.join(log_dir, f"actions_{ts}.jsonl")
+            try:
+                os.rename(self.log_path, archived_path)
+            except OSError:
+                pass
+        self._rotated = True
     
     def _ensure_dir(self):
         log_dir = os.path.dirname(self.log_path)
@@ -224,6 +255,8 @@ class ActionLogger:
         result: Optional[str] = None,
         success: bool = True
     ):
+        if round_num == 0 and not self._rotated:
+            self._rotate_stale_log()
         entry = {
             "round": round_num,
             "timestamp": datetime.now().isoformat(),
@@ -240,6 +273,8 @@ class ActionLogger:
             f.write(json.dumps(entry, ensure_ascii=False) + '\n')
     
     def log_round_start(self, round_num: int, simulated_hour: int, platform: str):
+        if round_num == 0 and not self._rotated:
+            self._rotate_stale_log()
         entry = {
             "round": round_num,
             "timestamp": datetime.now().isoformat(),
@@ -264,6 +299,8 @@ class ActionLogger:
             f.write(json.dumps(entry, ensure_ascii=False) + '\n')
     
     def log_simulation_start(self, platform: str, config: Dict[str, Any]):
+        if not self._rotated:
+            self._rotate_stale_log()
         entry = {
             "timestamp": datetime.now().isoformat(),
             "platform": platform,

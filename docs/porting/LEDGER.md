@@ -96,7 +96,7 @@ Only the orchestrator edits this file.
 | 077 | - | Issue #100: clean shutdown and buffer lock release in GraphMemoryUpdater to prevent thread leaks | bugfix | direct | low | ported | PR #117 (`b03ba42`) | Move I/O outside buffer lock and use sentinel termination to prevent thread leaks; 6 backend tests pass. |
 | 078 | - | Issue #101: atomic IPC command writing and isolated exception handling to prevent premature run exits | bugfix | direct | low | pending | `port/078` | Atomic IPC file replacement and isolated command exception handling. |
 | 079 | - | Issue #102: optimize action log deduplication complexity and synchronize concurrent action reads | bugfix | direct | medium | pending | `port/079` | Bounded set deduplication and mutex/snapshot protection on recent_actions. |
-| 080 | - | Issue #103: synchronize simulation lifecycle states and isolate append-only action logs across runs | bugfix | direct | medium | pending | `port/080` | Align STOPPED lifecycle state and isolate action logs between runs. |
+| 080 | - | Issue #103: synchronize simulation lifecycle states and isolate append-only action logs across runs | bugfix | direct | medium | in-review | `port/080` | Align STOPPED lifecycle state and isolate action logs between runs. |
 
 ## Skipped (with reason)
 | Upstream commit | Reason |
