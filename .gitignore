@@ -3,7 +3,7 @@
 .python-version
 Thumbs.db
 
-# 环境变量（保护敏感信息）
+# 环境变量（保护敏感信息
 .env
 .env.local
 .env.*.local
@@ -52,6 +52,7 @@ htmlcov/
 !.omp/config.yml
 .opencode/*
 !.opencode/agents/
+!.opencode/opencode.jsonc
 
 # 文档与测试程序
 mydoc/

@@ -1,14 +1,8 @@
 # Project-level omp config for MiroFish-Local.
 # If your omp version ignores project-level config.yml, copy these keys to ~/.omp/agent/config.yml.
 
-# Uncomment and set your own models. Agents reference these role aliases (@smol, @slow).
-# modelRoles:
-#   default: <provider>/<model>
-#   smol: <provider>/<cheap-model>
-#   slow: <provider>/<strong-model>:high
-
 task:
-  maxConcurrency: 4        # default is 32; low fan-out keeps cost and conflicts down
+  maxConcurrency: 3        # capped at 3 for Neo4j (port 7687) and backend test isolation
   maxRecursionDepth: 1     # workers must not delegate further (default is 2)
   isolation:
-    mode: none             # one omp session per git worktree; no extra omp isolation
+    mode: none             # one session per git worktree; no extra omp isolation

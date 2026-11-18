@@ -1,0 +1,101 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "default_agent": "orchestrator",
+  "agent": {
+    "orchestrator": {
+      "mode": "primary",
+      "model": "9router/ag/gemini-3.8-flash-high",
+      "description": "Main orchestrator coordinating multi-agent issue pipelines"
+    },
+    "architect": {
+      "mode": "subagent",
+      "model": "9router/ag/gemini-3.8-flash-high",
+      "description": "System architecture, Neo4j schema, and implementation planner"
+    },
+    "planner": {
+      "mode": "subagent",
+      "model": "9router/ag/gemini-3.8-flash-high",
+      "description": "Turns requests into scoped, verifiable implementation plans"
+    },
+    "debugger": {
+      "mode": "subagent",
+      "model": "9router/ag/gemini-3.8-flash-high",
+      "description": "Reproduces bugs, isolates root cause, and authors failing regression tests"
+    },
+    "reviewer": {
+      "mode": "subagent",
+      "model": "9router/ag/gemini-3.8-flash-high",
+      "description": "Evidence-based code review against AGENTS.md and upstream intent"
+    },
+    "developer": {
+      "mode": "subagent",
+      "model": "9router/ag/gemini-3.8-flash#medium",
+      "description": "Implements features, bug fixes, and porting in isolated worktrees"
+    },
+    "tester": {
+      "mode": "subagent",
+      "model": "9router/ag/gemini-3.8-flash#medium",
+      "description": "Runs test suites, authors edge-case tests, and verifies worktree integrity"
+    },
+    "integrator": {
+      "mode": "subagent",
+      "model": "9router/ag/gemini-3.8-flash#medium",
+      "description": "Merges approved branches into main after explicit human owner approval"
+    },
+    "graph-migration": {
+      "mode": "subagent",
+      "model": "9router/ag/gemini-3.8-flash#medium",
+      "description": "Neo4j schema, vector index, and embedding migrations"
+    },
+    "performance-engineer": {
+      "mode": "subagent",
+      "model": "9router/ag/gemini-3.8-flash#medium",
+      "description": "Implements performance optimizations, caching, and query tuning"
+    },
+    "pr-reviewer": {
+      "mode": "subagent",
+      "model": "9router/ag/gemini-3.8-flash#medium",
+      "description": "Reviews external PRs and upstream patches against project conventions"
+    },
+    "researcher": {
+      "mode": "subagent",
+      "model": "9router/ag/gemini-3.8-flash#low",
+      "description": "On-demand technical research answering questions with citations"
+    },
+    "explorer": {
+      "mode": "subagent",
+      "model": "9router/ag/gemini-3.8-flash#low",
+      "description": "Fast codebase exploration, dependency mapping, and hook tracing"
+    },
+    "triage": {
+      "mode": "subagent",
+      "model": "9router/ag/gemini-3.8-flash#low",
+      "description": "Triage incoming requests and bug reports into clear scopes"
+    },
+    "analyst": {
+      "mode": "subagent",
+      "model": "9router/ag/gemini-3.8-flash#low",
+      "description": "Requirements analysis, upstream diff classification, and scope boundaries"
+    },
+    "docs-writer": {
+      "mode": "subagent",
+      "model": "9router/ag/gemini-3.8-flash#low",
+      "description": "Updates documentation, LEDGER, and guides after change approval"
+    },
+    "upstream-analyst": {
+      "mode": "subagent",
+      "model": "9router/ag/gemini-3.8-flash#low",
+      "description": "Classifies upstream MiroFish commits and rates portability"
+    },
+    "performance-analyst": {
+      "mode": "subagent",
+      "model": "9router/ag/gemini-3.8-flash#low",
+      "description": "Analyzes bottlenecks, query profiles, and latency hotspots"
+    },
+    "bug-hunter": {
+      "mode": "subagent",
+      "model": "9router/ag/gemini-3.8-flash#low",
+      "description": "Deep vulnerability hunting, security audit, and defect analysis"
+    }
+  }
+}

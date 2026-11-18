@@ -46,11 +46,26 @@ cd backend && uv run pytest
 
 ### 4. Verdict & Final Report
 End with exactly one verdict line: `APPROVE` or `CHANGES(<numbered list>)`.
-Then provide the handoff report:
+
+**Severity Rubric:**
+- **BLOCKER**: Breaks correctness, security, data integrity, or core Neo4j/LLM contracts.
+- **MAJOR**: Likely bug, performance regression, or missing test for the change.
+- **MINOR**: Quality or maintainability improvement worth fixing, but not blocking.
+- **NIT**: Cosmetic, style, formatting, or naming preference.
+
+**Anti-Nit-Drift Rule:**
+- **Only BLOCKER and MAJOR findings trigger `CHANGES`.**
+- Minor issues and nits do not block `APPROVE`.
+- After round 1, raise only:
+  1. BLOCKER/MAJOR issues missed earlier.
+  2. Problems introduced by the latest fix.
+- Do not reopen resolved findings or introduce new nits in subsequent review rounds.
+
+Provide the handoff report:
 ```markdown
 ITEM:     <ID>
 VERDICT:  APPROVE | CHANGES
-FINDINGS: <[BLOCKER|MAJOR|MINOR] file:line — issue — suggested fix, or 'none'>
+FINDINGS: <[BLOCKER|MAJOR|MINOR|NIT] file:line — issue — suggested fix, or 'none'>
 CHANGED:  <files touched in diff>
 EVIDENCE: <Verification commands and output summary>
 RISKS:    <known gaps or trade-offs>

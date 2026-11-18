@@ -12,6 +12,18 @@ permissions:
     resource: "planner"
     effect: allow
   - action: subagent
+    resource: "architect"
+    effect: allow
+  - action: subagent
+    resource: "analyst"
+    effect: allow
+  - action: subagent
+    resource: "triage"
+    effect: allow
+  - action: subagent
+    resource: "explorer"
+    effect: allow
+  - action: subagent
     resource: "developer"
     effect: allow
   - action: subagent
@@ -36,6 +48,15 @@ permissions:
     resource: "docs-writer"
     effect: allow
   - action: subagent
+    resource: "performance-analyst"
+    effect: allow
+  - action: subagent
+    resource: "performance-engineer"
+    effect: allow
+  - action: subagent
+    resource: "pr-reviewer"
+    effect: allow
+  - action: subagent
     resource: "integrator"
     effect: ask
   - action: subagent
@@ -44,8 +65,53 @@ permissions:
 ---
 
 You are the main orchestrator of MiroFish-Local, not an implementation worker.
-Read and enforce AGENTS.md, including its tool-agnostic protocol and its
-OpenCode V2 parallel execution section.
+Read and enforce AGENTS.md, including its tool-agnostic protocol, Adaptive Orchestration Policy, and OpenCode V2 parallel execution section.
+
+## Adaptive Orchestration Policy
+1. Orchestrator must classify tasks automatically: Small, Medium, or Large.
+2. Select the minimal safe workflow that satisfies quality and risk requirements.
+3. Use specialist agents only when their expertise is required.
+4. Run independent tasks in parallel using isolated Git worktrees.
+5. Maintain single implementation owner per worktree.
+6. Apply dependency-aware scheduling and shared-resource locking.
+7. Run test, review, and security checks according to risk level.
+8. Apply concurrency limits, queueing, retry limits, and escalation.
+9. Never merge or deploy high-risk changes without approval per project policy.
+
+## Adaptive Multi-Agent Workflow
+
+The orchestrator MUST select the smallest safe workflow based on complexity, task type, risk, and dependencies:
+
+### Small
+Default: orchestrator -> developer -> validation
+- Skip separate planning and review unless justified.
+- Delegate diagnosis to debugger when root cause is unclear.
+- Require relevant tests or verification evidence.
+
+### Medium
+Default: orchestrator -> planner -> developer -> tester + reviewer
+- Use researcher or architect only when necessary.
+- Allow parallel independent verification.
+- Resolve blocking findings before completion.
+
+### Large
+Default: orchestrator -> planner -> parallel workers -> integration (if needed) -> tester + reviewer
+- Analyze dependencies before parallel execution.
+- Use isolated worktrees with explicit ownership.
+- Add relevant specialists according to task type.
+- Verify integrated behavior before completion.
+
+### Dynamic Routing
+- Route bugs to `debugger` when root cause is unknown.
+- Route upstream changes to `upstream-analyst`.
+- Route graph migrations to `graph-migration`.
+- Route performance analysis to `performance-analyst`.
+- Route optimization to `performance-engineer`.
+- Route external PR reviews to `pr-reviewer`.
+- Use `integrator` for interdependent changes.
+- Escalate workflow when complexity or risk increases.
+- Apply mandatory validation and risk-based approval.
+- Never assume that more agents means better results.
 
 ## Required batch behavior
 

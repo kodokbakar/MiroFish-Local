@@ -38,7 +38,12 @@ OASIS), and record modifications.
 ## Agent roles
 | Role | Primary Responsibility | Permissions & Boundary |
 |---|---|---|
-| `planner` | Technical scoping and acceptance criteria formulation | Read-only across repository; never writes code |
+| `orchestrator` | Overall multi-agent coordination, pipeline routing, and worktree dispatch | Read-only; delegates to subagents via `subagent` tool; never writes production code |
+| `analyst` | Requirements analysis, scope boundaries, and acceptance criteria formulation | Read-only across repository; never writes code |
+| `triage` | Initial triage of incoming requests and bug reports into verifiable criteria | Read-only across repository; never writes code |
+| `explorer` | Fast exploration of codebase, hooks, Neo4j queries, and technical solutions | Read-only across repository; never writes code |
+| `architect` | System architecture, Neo4j schemas, API contracts, and implementation design | Read-only across repository; never writes code |
+| `planner` | Technical scoping, step breakdown, and acceptance criteria formulation | Read-only across repository; never writes code |
 | `debugger` | Bug reproduction, root-cause isolation, and failing test authoring | Read-only on production code; writable only in `backend/tests/` or `frontend/tests/` |
 | `developer` | Implementation of feature or fix in assigned worktree | Writable in current worktree; minimal diff; no drive-by refactors |
 | `reviewer` | Evidence-based review against intent, AGENTS.md, and Neo4j rules | Read-only; bash only for diff/test inspection; verdict `APPROVE` or `CHANGES` |
@@ -47,13 +52,71 @@ OASIS), and record modifications.
 | `researcher` | On-demand technical question answering with citations and trade-offs | Read-only; no state changes |
 | `upstream-analyst` | Upstream commit classification and portability analysis | Read-only |
 | `graph-migration` | Neo4j schema, vector index, and embedding migrations | Specialized for Neo4j database migrations |
+| `performance-analyst` | Read-only profiler for latency, memory bloat, Neo4j Cypher plans, and LLM streaming | Read-only; no state changes |
+| `performance-engineer` | Implements performance optimizations, caching, and query tuning | Writable in current worktree |
+| `pr-reviewer` | Pre-merge Pull Request reviewer auditing CI checks, scope, and code logic | Read-only across repository |
+| `bug-hunter` | Deep vulnerability hunting, security audit, and systematic defect analysis | Read-only by default |
 | `docs-writer` | Documentation updates (README, LEDGER, guides) | Documentation files only, invoked after `APPROVE` |
+
+## Adaptive Orchestration Policy
+1. Orchestrator must classify tasks automatically: Small, Medium, or Large.
+2. Select the minimal safe workflow that satisfies quality and risk requirements.
+3. Use specialist agents only when their expertise is required.
+4. Run independent tasks in parallel using isolated Git worktrees.
+5. Maintain single implementation owner per worktree.
+6. Apply dependency-aware scheduling and shared-resource locking.
+7. Run test, review, and security checks according to risk level.
+8. Apply concurrency limits, queueing, retry limits, and escalation.
+9. Never merge or deploy high-risk changes without approval per project policy.
+
+## Adaptive Multi-Agent Workflow
+
+The orchestrator MUST select the smallest safe workflow based on complexity, task type, risk, and dependencies:
+
+### Small
+Default: orchestrator -> developer -> validation
+- Skip separate planning and review unless justified.
+- Delegate diagnosis to debugger when root cause is unclear.
+- Require relevant tests or verification evidence.
+
+### Medium
+Default: orchestrator -> planner -> developer -> tester + reviewer
+- Use researcher or architect only when necessary.
+- Allow parallel independent verification.
+- Resolve blocking findings before completion.
+
+### Large
+Default: orchestrator -> planner -> parallel workers -> integration (if needed) -> tester + reviewer
+- Analyze dependencies before parallel execution.
+- Use isolated worktrees with explicit ownership.
+- Add relevant specialists according to task type.
+- Verify integrated behavior before completion.
+
+### Dynamic Routing
+- Route bugs to `debugger` when root cause is unknown.
+- Route upstream changes to `upstream-analyst`.
+- Route graph migrations to `graph-migration`.
+- Route performance analysis to `performance-analyst`.
+- Route optimization to `performance-engineer`.
+- Route external PR reviews to `pr-reviewer`.
+- Use `integrator` for interdependent changes.
+- Escalate workflow when complexity or risk increases.
+- Apply mandatory validation and risk-based approval.
+- Never assume that more agents means better results.
 
 ## Execution & Boundary Model
 `reviewer`, `debugger`, and `tester` operate directly within their assigned `$WORKTREE`
 under strict boundaries:
 - **`reviewer`**: Audit committed changes relative to the agreed base, plus staged and
   unstaged diffs. Never rely on `git diff origin/main...HEAD` alone.
+  - **Findings Severity Rubric:**
+    - `BLOCKER`: breaks correctness, security, data integrity, or core Neo4j/LLM contracts.
+    - `MAJOR`: likely bug, performance degradation, or missing test for the change.
+    - `MINOR`: quality or maintainability improvement worth fixing, but not blocking.
+    - `NIT`: cosmetic, style, formatting, or naming preference.
+  - **Anti-Nit-Drift Rule:**
+    - Only `BLOCKER` and `MAJOR` findings trigger `CHANGES`. `MINOR` and `NIT` do not block `APPROVE`.
+    - After round 1, reviewer raises only (a) `BLOCKER`/`MAJOR` issues missed earlier or (b) problems introduced by the latest fix. Do not reopen resolved findings or add new nits in subsequent rounds.
 - **`debugger`**: Reproduce bugs and commit exactly one failing regression test in
   `backend/tests/` (production code is strictly read-only).
 - **`tester`**: Run `uv run pytest`, `uv run ruff`, and add edge-case tests in
@@ -157,6 +220,7 @@ should follow the tool-agnostic protocol above using their own supported tools.
 - `STAGE:` role/stage
 - `CHANGED:` files
 - `EVIDENCE:` commands run and results
+- `FINDINGS:` `[BLOCKER|MAJOR|MINOR|NIT] file:line — issue — suggested fix, or 'none'`
 - `VERDICT:` when applicable (`APPROVE`, `CHANGES`, `PASS`, `FAIL`)
 - `RISKS:` known gaps
 - `NEXT:` what the next stage must verify
