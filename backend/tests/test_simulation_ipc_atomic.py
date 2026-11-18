@@ -41,6 +41,11 @@ def _read_json(path: str) -> dict:
         return json.load(f)
 
 
+def _write_raw(path: str, content: str = ""):
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+
 class TestSimulationIPCAtomicWrites:
     """Tests ensuring command, response, and status writes are performed atomically via .tmp and os.replace."""
 
@@ -76,6 +81,7 @@ class TestSimulationIPCAtomicWrites:
                 CommandType.INTERVIEW,
                 {"agent_id": 0, "prompt": "hello"},
                 timeout=2.0,
+                poll_interval=0.01,
             )
 
         t.join()
@@ -273,3 +279,268 @@ class TestSimulationIPCExceptionIsolation:
         c2_continue = await handler.process_commands()
         assert c2_continue is True
         assert handler.handle_interview.await_count == 1
+
+
+class TestSimulationIPCEdgeCases:
+    """Edge-case tests for corrupt files, batch processing, large payloads, and stale tmp files."""
+
+    @pytest.mark.asyncio
+    async def test_corrupt_and_zero_byte_command_files_handled_cleanly(self, tmp_path):
+        """
+        Corrupt JSON or zero-byte command files left in IPC directory must be ignored cleanly
+        without crashing poll_command() or process_commands(), and valid commands must still be executed.
+        """
+        handler = ParallelIPCHandler(str(tmp_path))
+
+        # Create zero-byte and corrupt files via sync helper
+        zero_file = os.path.join(handler.commands_dir, "00_empty.json")
+        _write_raw(zero_file, "")
+
+        corrupt_file = os.path.join(handler.commands_dir, "01_corrupt.json")
+        _write_raw(corrupt_file, "{invalid_json: unterminated")
+
+        # Running process_commands with only bad files must return True and not crash
+        cont = await handler.process_commands()
+        assert cont is True
+
+        # Now add a valid command
+        valid_file = os.path.join(handler.commands_dir, "02_valid.json")
+        _write_json(valid_file, {
+            "command_id": "cmd-valid-after-corrupt",
+            "command_type": "interview",
+            "args": {"agent_id": 1, "prompt": "test prompt"},
+        })
+
+        handler.handle_interview = AsyncMock(return_value=True)
+        cont = await handler.process_commands()
+        assert cont is True
+        assert handler.handle_interview.await_count == 1
+
+        # Also verify SimulationIPCServer skips corrupt and zero-byte files cleanly
+        server = SimulationIPCServer(str(tmp_path))
+        polled = server.poll_commands()
+        assert polled is None or polled.command_id == "cmd-valid-after-corrupt"
+
+    @pytest.mark.asyncio
+    async def test_batch_mixed_commands_execution_and_isolation(self, tmp_path):
+        """
+        When IPC directory contains a batch of mixed valid and invalid commands,
+        processing them must execute valid ones, record failure for invalid ones,
+        and never exit the loop prematurely.
+        """
+        handler = ParallelIPCHandler(str(tmp_path))
+
+        # Command 1: Valid interview
+        _write_json(os.path.join(handler.commands_dir, "cmd-batch-1.json"), {
+            "command_id": "cmd-batch-1",
+            "command_type": "interview",
+            "args": {"agent_id": 1, "prompt": "p1"},
+        })
+
+        # Command 2: Invalid command type
+        _write_json(os.path.join(handler.commands_dir, "cmd-batch-2.json"), {
+            "command_id": "cmd-batch-2",
+            "command_type": "unsupported_action",
+            "args": {},
+        })
+
+        # Command 3: Malformed args (string instead of dict)
+        _write_json(os.path.join(handler.commands_dir, "cmd-batch-3.json"), {
+            "command_id": "cmd-batch-3",
+            "command_type": "interview",
+            "args": "not-a-dict",
+        })
+
+        # Command 4: Valid interview
+        _write_json(os.path.join(handler.commands_dir, "cmd-batch-4.json"), {
+            "command_id": "cmd-batch-4",
+            "command_type": "interview",
+            "args": {"agent_id": 2, "prompt": "p2"},
+        })
+
+        async def mock_interview(cmd_id, *args, **kwargs):
+            handler.send_response(cmd_id, "completed", result={"ok": True})
+            return True
+
+        handler.handle_interview = AsyncMock(side_effect=mock_interview)
+
+        loop_returns = []
+        for _ in range(4):
+            cont = await handler.process_commands()
+            loop_returns.append(cont)
+
+        # Loop must never return False for these commands
+        assert all(ret is True for ret in loop_returns)
+
+        # Valid commands executed
+        assert handler.handle_interview.await_count == 2
+
+        # Verify all responses recorded correctly
+        resp1 = _read_json(os.path.join(handler.responses_dir, "cmd-batch-1.json"))
+        assert resp1["status"] == "completed"
+
+        resp2 = _read_json(os.path.join(handler.responses_dir, "cmd-batch-2.json"))
+        assert resp2["status"] == "failed"
+        assert "Unknown command type" in resp2["error"]
+
+        resp3 = _read_json(os.path.join(handler.responses_dir, "cmd-batch-3.json"))
+        assert resp3["status"] == "failed"
+        assert "Invalid command arguments" in resp3["error"]
+
+        resp4 = _read_json(os.path.join(handler.responses_dir, "cmd-batch-4.json"))
+        assert resp4["status"] == "completed"
+
+    def test_large_payload_atomic_writes(self, tmp_path):
+        """
+        Verify large multi-kilobyte JSON commands and responses write atomically
+        via temporary (.tmp) files and os.replace without truncation or partial reads.
+        """
+        client = SimulationIPCClient(str(tmp_path))
+        large_text = "X" * 120_000  # 120 KB
+        large_args = {
+            "agent_id": 99,
+            "prompt": large_text,
+            "metadata": {"items": list(range(1000))},
+        }
+
+        # Background thread responds to large command
+        def responder():
+            start = time.time()
+            while time.time() - start < 3.0:
+                files = [f for f in os.listdir(client.commands_dir) if f.endswith(".json")]
+                if files:
+                    cmd_id = files[0].replace(".json", "")
+                    cmd_file = os.path.join(client.commands_dir, files[0])
+                    # Read command to ensure complete JSON was written
+                    cmd_data = _read_json(cmd_file)
+                    assert cmd_data["args"]["prompt"] == large_text
+
+                    # Write large response
+                    resp = IPCResponse(
+                        command_id=cmd_id,
+                        status=CommandStatus.COMPLETED,
+                        result={"echo": cmd_data["args"]["prompt"], "large_arr": list(range(500))},
+                    )
+                    resp_file = os.path.join(client.responses_dir, f"{cmd_id}.json")
+                    _write_json(resp_file, resp.to_dict())
+                    break
+                time.sleep(0.01)
+
+        t = threading.Thread(target=responder)
+        t.start()
+
+        with patch("os.replace", wraps=os.replace) as mock_replace:
+            response = client.send_command(
+                CommandType.INTERVIEW,
+                large_args,
+                timeout=3.0,
+                poll_interval=0.01,
+            )
+
+        t.join()
+        assert response.status == CommandStatus.COMPLETED
+        assert response.result["echo"] == large_text
+
+        # Verify atomic write of command via os.replace
+        replaces = [
+            call for call in mock_replace.call_args_list
+            if len(call[0]) >= 2 and call[0][1].endswith(".json") and client.commands_dir in call[0][1]
+        ]
+        assert len(replaces) >= 1
+        src, dst = replaces[0][0][:2]
+        assert src.endswith(".tmp")
+        assert dst.endswith(".json")
+
+        # Test ParallelIPCHandler atomic write with large response
+        handler = ParallelIPCHandler(str(tmp_path))
+        with patch("os.replace", wraps=os.replace) as mock_replace_resp:
+            handler.send_response(
+                command_id="cmd-large-resp",
+                status="completed",
+                result={"payload": "Y" * 150_000},
+            )
+
+        resp_file = os.path.join(handler.responses_dir, "cmd-large-resp.json")
+        assert os.path.exists(resp_file)
+        written_data = _read_json(resp_file)
+        assert written_data["result"]["payload"] == "Y" * 150_000
+
+        resp_replaces = [
+            call for call in mock_replace_resp.call_args_list
+            if len(call[0]) >= 2 and call[0][1] == resp_file
+        ]
+        assert len(resp_replaces) >= 1
+        assert resp_replaces[0][0][0].endswith(".tmp")
+
+    def test_stale_tmp_files_do_not_block_new_commands_or_updates(self, tmp_path):
+        """
+        Verify abandoned .tmp files left in commands, responses, or simulation directory
+        do not block polling, new command creation, response emission, or status updates.
+        """
+        handler = ParallelIPCHandler(str(tmp_path))
+
+        # Create abandoned .tmp files in commands, responses, and simulation directories
+        stale_cmd_tmp = os.path.join(handler.commands_dir, "abandoned_cmd.tmp")
+        _write_raw(stale_cmd_tmp, "partial command content")
+
+        fixed_cmd_id = "cmd-fixed-1"
+        target_cmd_tmp = os.path.join(handler.commands_dir, f"{fixed_cmd_id}.json.tmp")
+        _write_raw(target_cmd_tmp, "leftover partial write from previous crash")
+
+        target_resp_tmp = os.path.join(handler.responses_dir, f"{fixed_cmd_id}.json.tmp")
+        _write_raw(target_resp_tmp, "leftover response partial write")
+
+        stale_status_tmp = f"{handler.status_file}.tmp"
+        _write_raw(stale_status_tmp, "stale status partial write")
+
+        # 1. poll_command must ignore .tmp files
+        assert handler.poll_command() is None
+
+        # 2. SimulationIPCClient writing a command overwrites stale .tmp cleanly
+        client = SimulationIPCClient(str(tmp_path))
+        with patch("app.services.simulation_ipc.uuid.uuid4", return_value=fixed_cmd_id):
+            # Responder thread to complete send_command
+            def reply():
+                start = time.time()
+                while time.time() - start < 2.0:
+                    cmd_path = os.path.join(client.commands_dir, f"{fixed_cmd_id}.json")
+                    if os.path.exists(cmd_path):
+                        resp = IPCResponse(
+                            command_id=fixed_cmd_id,
+                            status=CommandStatus.COMPLETED,
+                            result={"ok": True},
+                        )
+                        _write_json(os.path.join(client.responses_dir, f"{fixed_cmd_id}.json"), resp.to_dict())
+                        break
+                    time.sleep(0.01)
+
+            t = threading.Thread(target=reply)
+            t.start()
+
+            resp = client.send_command(
+                CommandType.INTERVIEW,
+                {"agent_id": 1, "prompt": "test"},
+                timeout=2.0,
+                poll_interval=0.01,
+            )
+            t.join()
+            assert resp.status == CommandStatus.COMPLETED
+
+        # 3. handler.send_response cleanly overwrites existing target_resp_tmp
+        handler.send_response(
+            command_id=fixed_cmd_id,
+            status="completed",
+            result={"res": "ok"},
+        )
+        resp_file = os.path.join(handler.responses_dir, f"{fixed_cmd_id}.json")
+        assert os.path.exists(resp_file)
+        resp_data = _read_json(resp_file)
+        assert resp_data["result"] == {"res": "ok"}
+        assert not os.path.exists(target_resp_tmp)
+
+        # 4. handler.update_status cleanly overwrites existing stale_status_tmp
+        handler.update_status("running")
+        assert os.path.exists(handler.status_file)
+        status_data = _read_json(handler.status_file)
+        assert status_data["status"] == "running"
+        assert not os.path.exists(stale_status_tmp)
