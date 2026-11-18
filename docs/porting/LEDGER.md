@@ -94,9 +94,9 @@ Only the orchestrator edits this file.
 | 075 | - | Issue #98: fix session lifecycle in Neo4j driver retry loop to recover from transient failures | bugfix | adapt | medium | ported | PR #118 (`7eb84dd`) | Acquire fresh session inside retry loop to prevent ClientError on expired sessions; 10 backend tests pass. |
 | 076 | - | Issue #99: enforce uniqueness constraint on Entity (graph_id, name_lower) to prevent duplicate nodes | bugfix | adapt | medium | ported | PR #119 (`b1ee811`) | Replace index with composite uniqueness constraint on Entity (graph_id, name_lower); 6 backend tests pass. |
 | 077 | - | Issue #100: clean shutdown and buffer lock release in GraphMemoryUpdater to prevent thread leaks | bugfix | direct | low | ported | PR #117 (`b03ba42`) | Move I/O outside buffer lock and use sentinel termination to prevent thread leaks; 6 backend tests pass. |
-| 078 | - | Issue #101: atomic IPC command writing and isolated exception handling to prevent premature run exits | bugfix | direct | low | pending | `port/078` | Atomic IPC file replacement and isolated command exception handling. |
-| 079 | - | Issue #102: optimize action log deduplication complexity and synchronize concurrent action reads | bugfix | direct | medium | pending | `port/079` | Bounded set deduplication and mutex/snapshot protection on recent_actions. |
-| 080 | - | Issue #103: synchronize simulation lifecycle states and isolate append-only action logs across runs | bugfix | direct | medium | pending | `port/080` | Align STOPPED lifecycle state and isolate action logs between runs. |
+| 078 | - | Issue #101: atomic IPC command writing and isolated exception handling to prevent premature run exits | bugfix | direct | low | pending | PR #122 (`port/078`) | Atomic IPC file replacement and isolated command exception handling; 11 backend tests pass. |
+| 079 | - | Issue #102: optimize action log deduplication complexity and synchronize concurrent action reads | bugfix | direct | medium | pending | PR #120 (`port/079`) | Bounded set deduplication and mutex/snapshot protection on recent_actions; 8 backend tests pass. |
+| 080 | - | Issue #103: synchronize simulation lifecycle states and isolate append-only action logs across runs | bugfix | direct | medium | pending | PR #121 (`port/080`) | Align STOPPED lifecycle state and isolate action logs between runs; 6 backend tests pass. |
 
 ## Skipped (with reason)
 | Upstream commit | Reason |
