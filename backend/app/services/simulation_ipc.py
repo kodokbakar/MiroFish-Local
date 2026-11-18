@@ -144,8 +144,18 @@ class SimulationIPCClient:
         
         # Write command file
         command_file = os.path.join(self.commands_dir, f"{command_id}.json")
-        with open(command_file, 'w', encoding='utf-8') as f:
-            json.dump(command.to_dict(), f, ensure_ascii=False, indent=2)
+        command_tmp = f"{command_file}.tmp"
+        try:
+            with open(command_tmp, 'w', encoding='utf-8') as f:
+                json.dump(command.to_dict(), f, ensure_ascii=False, indent=2)
+            os.replace(command_tmp, command_file)
+        except Exception:
+            if os.path.exists(command_tmp):
+                try:
+                    os.remove(command_tmp)
+                except OSError:
+                    pass
+            raise
         
         logger.info(f"Send IPC command: {command_type.value}, command_id={command_id}")
         
@@ -324,11 +334,21 @@ class SimulationIPCServer:
     def _update_env_status(self, status: str):
         """Update environment status file"""
         status_file = os.path.join(self.simulation_dir, "env_status.json")
-        with open(status_file, 'w', encoding='utf-8') as f:
-            json.dump({
-                "status": status,
-                "timestamp": datetime.now().isoformat()
-            }, f, ensure_ascii=False, indent=2)
+        status_tmp = f"{status_file}.tmp"
+        try:
+            with open(status_tmp, 'w', encoding='utf-8') as f:
+                json.dump({
+                    "status": status,
+                    "timestamp": datetime.now().isoformat()
+                }, f, ensure_ascii=False, indent=2)
+            os.replace(status_tmp, status_file)
+        except Exception:
+            if os.path.exists(status_tmp):
+                try:
+                    os.remove(status_tmp)
+                except OSError:
+                    pass
+            raise
     
     def poll_commands(self) -> Optional[IPCCommand]:
         """
@@ -368,8 +388,18 @@ class SimulationIPCServer:
             response: IPC response
         """
         response_file = os.path.join(self.responses_dir, f"{response.command_id}.json")
-        with open(response_file, 'w', encoding='utf-8') as f:
-            json.dump(response.to_dict(), f, ensure_ascii=False, indent=2)
+        response_tmp = f"{response_file}.tmp"
+        try:
+            with open(response_tmp, 'w', encoding='utf-8') as f:
+                json.dump(response.to_dict(), f, ensure_ascii=False, indent=2)
+            os.replace(response_tmp, response_file)
+        except Exception:
+            if os.path.exists(response_tmp):
+                try:
+                    os.remove(response_tmp)
+                except OSError:
+                    pass
+            raise
         
         # Delete command file
         command_file = os.path.join(self.commands_dir, f"{response.command_id}.json")
