@@ -302,7 +302,7 @@ def test_ipc_client_send_command_low_latency_polling(tmp_path):
         # Wait until command file is written, then immediately write response
         start = time.time()
         while time.time() - start < 2.0:
-            cmd_files = os.listdir(client.commands_dir)
+            cmd_files = [f for f in os.listdir(client.commands_dir) if f.endswith(".json")]
             if cmd_files:
                 cmd_id = cmd_files[0].replace(".json", "")
                 resp = IPCResponse(

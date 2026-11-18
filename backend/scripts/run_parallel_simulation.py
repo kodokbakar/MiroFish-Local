@@ -245,13 +245,23 @@ class ParallelIPCHandler:
     
     def update_status(self, status: str):
         """Update environment status"""
-        with open(self.status_file, 'w', encoding='utf-8') as f:
-            json.dump({
-                "status": status,
-                "twitter_available": self.twitter_env is not None,
-                "reddit_available": self.reddit_env is not None,
-                "timestamp": datetime.now().isoformat()
-            }, f, ensure_ascii=False, indent=2)
+        status_tmp = f"{self.status_file}.tmp"
+        try:
+            with open(status_tmp, 'w', encoding='utf-8') as f:
+                json.dump({
+                    "status": status,
+                    "twitter_available": self.twitter_env is not None,
+                    "reddit_available": self.reddit_env is not None,
+                    "timestamp": datetime.now().isoformat()
+                }, f, ensure_ascii=False, indent=2)
+            os.replace(status_tmp, self.status_file)
+        except Exception:
+            if os.path.exists(status_tmp):
+                try:
+                    os.remove(status_tmp)
+                except OSError:
+                    pass
+            raise
     
     def poll_command(self) -> Optional[Dict[str, Any]]:
         """Poll for pending commands"""
@@ -287,8 +297,18 @@ class ParallelIPCHandler:
         }
         
         response_file = os.path.join(self.responses_dir, f"{command_id}.json")
-        with open(response_file, 'w', encoding='utf-8') as f:
-            json.dump(response, f, ensure_ascii=False, indent=2)
+        response_tmp = f"{response_file}.tmp"
+        try:
+            with open(response_tmp, 'w', encoding='utf-8') as f:
+                json.dump(response, f, ensure_ascii=False, indent=2)
+            os.replace(response_tmp, response_file)
+        except Exception:
+            if os.path.exists(response_tmp):
+                try:
+                    os.remove(response_tmp)
+                except OSError:
+                    pass
+            raise
         
         # Delete command file
         command_file = os.path.join(self.commands_dir, f"{command_id}.json")
@@ -568,36 +588,54 @@ class ParallelIPCHandler:
         if not command:
             return True
         
+        if not isinstance(command, dict):
+            return True
+
         command_id = command.get("command_id")
         command_type = command.get("command_type")
-        args = command.get("args", {})
+        args = command.get("args")
         
         print(f"\nReceived IPC command: {command_type}, id={command_id}")
-        
-        if command_type == CommandType.INTERVIEW:
-            await self.handle_interview(
-                command_id,
-                args.get("agent_id", 0),
-                args.get("prompt", ""),
-                args.get("platform")
-            )
-            return True
+
+        try:
+            if not isinstance(args, dict):
+                raise TypeError(f"Invalid command arguments: expected dict, got {type(args).__name__}")
+
+            if command_type == CommandType.INTERVIEW:
+                await self.handle_interview(
+                    command_id,
+                    args.get("agent_id", 0),
+                    args.get("prompt", ""),
+                    args.get("platform")
+                )
+                return True
+                
+            elif command_type == CommandType.BATCH_INTERVIEW:
+                await self.handle_batch_interview(
+                    command_id,
+                    args.get("interviews", []),
+                    args.get("platform")
+                )
+                return True
+                
+            elif command_type == CommandType.CLOSE_ENV:
+                print("Received close environment command")
+                self.send_response(command_id, "completed", result={"message": "Environment will close"})
+                return False
             
-        elif command_type == CommandType.BATCH_INTERVIEW:
-            await self.handle_batch_interview(
-                command_id,
-                args.get("interviews", []),
-                args.get("platform")
-            )
-            return True
-            
-        elif command_type == CommandType.CLOSE_ENV:
-            print("Received close environment command")
-            self.send_response(command_id, "completed", result={"message": "Environment will close"})
-            return False
-        
-        else:
-            self.send_response(command_id, "failed", error=f"Unknown command type: {command_type}")
+            else:
+                self.send_response(command_id, "failed", error=f"Unknown command type: {command_type}")
+                return True
+
+        except Exception as e:
+            print(f"Error executing IPC command {command_id} ({command_type}): {e}")
+            if command_id:
+                self.send_response(command_id, "failed", error=str(e))
+                command_file = os.path.join(self.commands_dir, f"{command_id}.json")
+                try:
+                    os.remove(command_file)
+                except OSError:
+                    pass
             return True
 
 
